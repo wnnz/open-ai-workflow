@@ -1,0 +1,126 @@
+name: open-ai-workflow
+
+x-build-proxy: &build-proxy
+  HTTP_PROXY: ${CONTAINER_HTTP_PROXY:-http://host.docker.internal:10808}
+  HTTPS_PROXY: ${CONTAINER_HTTP_PROXY:-http://host.docker.internal:10808}
+  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,postgres,redis,minio,api,worker,sandbox,document-worker}
+
+x-backend: &backend
+  build:
+    context: ./backend
+    args: *build-proxy
+  env_file: .env
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: openworkflow
+      POSTGRES_PASSWORD: openworkflow
+      POSTGRES_DB: openworkflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openworkflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-openworkflow}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-replace-me}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  api:
+    <<: *backend
+    command: sh -c "python -m app.bootstrap && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  worker:
+    <<: *backend
+    command: celery -A app.worker.celery worker --loglevel=INFO
+
+  beat:
+    <<: *backend
+    command: celery -A app.worker.celery beat --loglevel=INFO
+
+  sandbox:
+    build:
+      context: ./sandbox
+      args: *build-proxy
+    environment:
+      SANDBOX_SHARED_SECRET: ${APP_SECRET_KEY}
+      SANDBOX_VOLUME: open-ai-workflow_sandbox-data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - //var/run/docker.sock:/var/run/docker.sock
+      - sandbox-data:/sandbox-data
+    ports:
+      - "8081:8081"
+
+  document-worker:
+    build:
+      context: ./document-worker
+      args: *build-proxy
+    ports:
+      - "8082:8082"
+
+  web:
+    build:
+      context: ./frontend
+      args: *build-proxy
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "5173:80"
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  sandbox-data:
