@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   ArrowLeft,
@@ -10,7 +11,7 @@ import {
   Logs,
   Monitor,
   Moon,
-  MoreHorizontal,
+  Pencil,
   PanelLeftOpen,
   Search,
   Sparkles,
@@ -19,7 +20,7 @@ import {
 
 export type DesignerSection = 'orchestration' | 'api' | 'logs' | 'monitoring'
 
-defineProps<{
+const props = defineProps<{
   collapsed?: boolean
   workflowName?: string
   userName?: string
@@ -35,9 +36,37 @@ const emit = defineEmits<{
   toggleLocale: []
   toggleTheme: []
   help: []
+  renameWorkflow: [name: string]
 }>()
 
 const { t } = useI18n()
+const renaming = ref(false)
+const draftName = ref('')
+const nameInput = ref<HTMLInputElement | null>(null)
+
+watch(() => props.workflowName, name => {
+  if (!renaming.value) draftName.value = name || ''
+}, { immediate: true })
+
+async function startRename() {
+  draftName.value = props.workflowName || ''
+  renaming.value = true
+  await nextTick()
+  nameInput.value?.focus()
+  nameInput.value?.select()
+}
+
+function commitRename() {
+  if (!renaming.value) return
+  const name = draftName.value.trim()
+  renaming.value = false
+  if (name && name !== props.workflowName) emit('renameWorkflow', name)
+}
+
+function cancelRename() {
+  renaming.value = false
+  draftName.value = props.workflowName || ''
+}
 
 const navigation: Array<{ id: DesignerSection; icon: typeof Sparkles; label: string }> = [
   { id: 'orchestration', icon: Sparkles, label: 'designer.orchestration' },
@@ -58,8 +87,11 @@ const navigation: Array<{ id: DesignerSection; icon: typeof Sparkles; label: str
     <div v-if="!collapsed" class="border-b border-[var(--border)] p-4">
       <div class="flex items-center gap-3">
         <span class="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-50 text-violet-600 dark:bg-violet-950/40"><ListTree :size="20" /></span>
-        <div class="min-w-0"><div class="truncate text-sm font-semibold">{{ workflowName }}</div><div class="muted mt-0.5 text-[11px]">{{ t('studio.workflow') }}</div></div>
-        <MoreHorizontal class="muted ml-auto" :size="16" />
+        <div class="min-w-0 flex-1">
+          <input v-if="renaming" ref="nameInput" v-model="draftName" class="h-7 w-full rounded-md border border-[var(--primary)] bg-[var(--panel)] px-2 text-sm font-semibold outline-none" :aria-label="t('designer.renameWorkflow')" maxlength="120" @keydown.enter.prevent="commitRename" @keydown.escape.prevent="cancelRename" @blur="commitRename" />
+          <button v-else type="button" class="group flex max-w-full items-center gap-1 text-left" :title="t('designer.renameWorkflow')" @click="startRename"><span class="truncate text-sm font-semibold">{{ workflowName }}</span><Pencil class="muted shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" :size="12" /></button>
+          <div class="muted mt-0.5 text-[11px]">{{ t('studio.workflow') }}</div>
+        </div>
       </div>
       <button type="button" class="mt-3 flex h-8 w-full items-center gap-2 rounded-lg bg-[var(--panel-subtle)] px-2.5 text-xs text-[var(--muted)] hover:text-[var(--text)]" @click="emit('search')"><Search :size="13" /><span class="truncate">{{ t('designer.searchAnything') }}</span><kbd class="ml-auto rounded border border-[var(--border)] bg-[var(--panel)] px-1.5 py-0.5 text-[8px]">Ctrl K</kbd></button>
     </div>

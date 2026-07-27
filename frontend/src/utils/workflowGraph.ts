@@ -303,6 +303,35 @@ export function layoutWorkflow<T extends WorkflowNodeLike>(nodes: T[], edges: Wo
   }
 
   const orderedLayers = [...groups.keys()].sort((left, right) => left - right)
+  for (const group of groups.values()) group.sort((left, right) => left.position.y - right.position.y || left.position.x - right.position.x)
+  const predecessors = new Map(nodes.map(node => [node.id, [] as string[]]))
+  for (const edge of validEdges) predecessors.get(edge.target)!.push(edge.source)
+  const currentOrder = () => {
+    const order = new Map<string, number>()
+    for (const group of groups.values()) group.forEach((node, index) => order.set(node.id, index))
+    return order
+  }
+  const reorderLayer = (nodeLayer: number, neighbors: Map<string, string[]>) => {
+    const group = groups.get(nodeLayer)
+    if (!group || group.length < 2) return
+    const order = currentOrder()
+    const score = (node: T) => {
+      const values = (neighbors.get(node.id) || []).map(id => order.get(id)).filter((value): value is number => value !== undefined)
+      return values.length ? values.reduce((total, value) => total + value, 0) / values.length : null
+    }
+    group.sort((left, right) => {
+      const leftScore = score(left)
+      const rightScore = score(right)
+      if (leftScore === null && rightScore === null) return 0
+      if (leftScore === null) return 1
+      if (rightScore === null) return -1
+      return leftScore - rightScore
+    })
+  }
+  for (let pass = 0; pass < 4; pass += 1) {
+    for (const nodeLayer of orderedLayers.slice(1)) reorderLayer(nodeLayer, predecessors)
+    for (const nodeLayer of [...orderedLayers].reverse().slice(1)) reorderLayer(nodeLayer, outgoing)
+  }
   const layerX = new Map<number, number>()
   let cursorX = 100
   for (const nodeLayer of orderedLayers) {

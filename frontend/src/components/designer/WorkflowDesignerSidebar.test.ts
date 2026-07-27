@@ -40,4 +40,18 @@ describe('WorkflowDesignerSidebar', () => {
     expect(wrapper.get('button[title="日志"]').attributes('aria-current')).toBe('page')
     expect(wrapper.get('button[title="展开侧边栏"]').attributes('aria-label')).toBe('展开侧边栏')
   })
+
+  it('renames the workflow inline', async () => {
+    const wrapper = mount(WorkflowDesignerSidebar, {
+      props: { workflowName: '旧名称', userName: 'Codex Demo', activeSection: 'orchestration' },
+      global: { plugins: [i18n] },
+    })
+
+    await wrapper.get('button[title="修改工作流名称"]').trigger('click')
+    const input = wrapper.get('input[aria-label="修改工作流名称"]')
+    await input.setValue('新名称')
+    await input.trigger('keydown', { key: 'Enter' })
+
+    expect(wrapper.emitted('renameWorkflow')).toEqual([['新名称']])
+  })
 })

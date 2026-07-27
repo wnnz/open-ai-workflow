@@ -149,6 +149,7 @@ export const messages = {
     },
     designer: {
       orchestration: "编排",
+      renameWorkflow: "修改工作流名称",
       runThisNode: "运行此节点",
       changeNode: "更改节点",
       expandSection: "展开分区",
@@ -1097,6 +1098,7 @@ export const messages = {
     },
     designer: {
       orchestration: "Orchestration",
+      renameWorkflow: "Rename workflow",
       runThisNode: "Run this node",
       changeNode: "Change node",
       expandSection: "Expand section",

@@ -112,6 +112,21 @@ describe('workflow graph utilities', () => {
     expect(nextPosition.x).toBeGreaterThanOrEqual(largePosition.x + 720 + 80)
   })
 
+  it('reorders nodes within dependency layers to reduce crossing edges', () => {
+    const graphNodes = [
+      { id: 'top-left', type: 'template', position: { x: 0, y: 100 } },
+      { id: 'bottom-left', type: 'template', position: { x: 0, y: 300 } },
+      { id: 'top-right', type: 'template', position: { x: 300, y: 100 } },
+      { id: 'bottom-right', type: 'template', position: { x: 300, y: 300 } },
+    ]
+    const laidOut = layoutWorkflow(graphNodes, [
+      { source: 'top-left', target: 'bottom-right' },
+      { source: 'bottom-left', target: 'top-right' },
+    ])
+
+    expect(laidOut.find(node => node.id === 'bottom-right')!.position.y).toBeLessThan(laidOut.find(node => node.id === 'top-right')!.position.y)
+  })
+
   it('uses resized container styles instead of stale measured dimensions', () => {
     const iteration = { id: 'iteration', type: 'iteration', position: { x: 0, y: 0 }, dimensions: { width: 900, height: 900 }, style: { width: '520px', height: '260px' } }
     const sibling = { id: 'sibling', type: 'template', position: { x: 0, y: 0 }, dimensions: { width: 206, height: 82 } }

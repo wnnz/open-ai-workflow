@@ -535,6 +535,15 @@ async function performSave() {
   }
   finally { saving.value = false }
 }
+function renameWorkflow(name: string) {
+  if (!workflow.value || !name.trim() || name.trim() === workflow.value.name) return
+  workflow.value = { ...workflow.value, name: name.trim() }
+  editRevision.value += 1
+  dirty.value = true
+  saveError.value = ''
+  saveConflict.value = false
+  scheduleSave()
+}
 async function save(): Promise<boolean> {
   if (!loaded.value) return false
   while (activeSave) {
@@ -1353,6 +1362,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.
       @toggle-locale="toggleLocale"
       @toggle-theme="toggleTheme"
       @help="showHelp = true"
+      @rename-workflow="renameWorkflow"
     />
 
     <div class="flex min-w-0 flex-1 flex-col">
@@ -1574,7 +1584,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.
 .workflow-canvas.annotation-mode .vue-flow__pane { cursor: crosshair; }
 .workflow-canvas.middle-panning .vue-flow__pane, .workflow-canvas.middle-panning .vue-flow__node { cursor: grabbing !important; }
 .designer-sidebar { letter-spacing: 0; }.icon-button { display: inline-flex; width: 30px; height: 30px; flex: none; align-items: center; justify-content: center; border-radius: 7px; color: var(--muted); }.icon-button:hover { background: var(--panel-subtle); color: var(--text); }.side-nav { display: flex; width: 100%; height: 36px; align-items: center; gap: 10px; border-radius: 7px; padding: 0 10px; color: var(--muted); font-size: 13px; }.side-nav:hover { background: var(--panel-subtle); color: var(--text); }.side-nav.active { background: var(--primary-soft); color: var(--primary); font-weight: 600; }.workflow-canvas { background: var(--app-bg); }.workflow-canvas .vue-flow__node { border: 0; background: transparent; padding: 0; box-shadow: none; }.workflow-canvas .vue-flow__handle { width: 9px; height: 9px; border: 2px solid var(--panel); background: var(--primary); }.workflow-canvas .vue-flow__handle.quick-add-handle { width: 20px; height: 20px; border: 0; background: transparent; }.workflow-canvas .vue-flow__edge-path { stroke: #98a2b3; stroke-width: 1.5; }.canvas-mode-button { display: flex; width: 36px; height: 36px; align-items: center; justify-content: center; color: var(--muted); }.canvas-mode-button:hover { background: var(--panel-subtle); color: var(--text); }.canvas-mode-button.active { background: var(--primary-soft); color: var(--primary); }.canvas-action-row { display: flex; width: 100%; height: 32px; align-items: center; gap: 8px; border-radius: 6px; padding: 0 9px; font-size: 12px; }.canvas-action-row:hover:not(:disabled) { background: var(--panel-subtle); }.canvas-action-row:disabled { cursor: not-allowed; opacity: .4; }.inspector-tab { height: 40px; border-bottom: 2px solid transparent; padding: 0 12px; color: var(--muted); font-size: 12px; }.inspector-tab.active { border-color: var(--primary); color: var(--primary); font-weight: 600; }.field-label { display: block; color: var(--text); font-size: 12px; font-weight: 600; }.vue-flow__minimap { overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
-.designer-header-actions .icon-button { width: 36px; height: 36px; }.designer-header-actions .header-env-button { height: 36px; }.designer-header-actions button { transition: background-color .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease, transform .15s ease; }.designer-header-actions button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 3px 10px rgb(16 24 40 / 12%); }.designer-header-actions .header-env-button:hover { border-color: color-mix(in srgb, var(--primary), var(--border) 55%); background: var(--panel-subtle); color: var(--text); }
+.designer-header-actions .icon-button { width: 36px; height: 36px; }.designer-header-actions .header-env-button { height: 36px; }.designer-header-actions button { transition: background-color .15s ease, border-color .15s ease, color .15s ease, filter .15s ease; }.designer-header-actions button.surface:hover:not(:disabled) { border-color: color-mix(in srgb, var(--primary), var(--border) 55%); background: var(--primary-soft); color: var(--primary); box-shadow: none; transform: none; }
 .resource-empty { border: 1px dashed var(--border); border-radius: 7px; background: var(--panel-subtle); padding: 10px; color: var(--muted); font-size: 11px; }.field-error { margin-top: 6px; color: #d92d20; font-size: 11px; }
 .canvas-history-button { display: flex; width: 34px; height: 34px; align-items: center; justify-content: center; color: var(--muted); }.canvas-history-button:hover:not(:disabled) { background: var(--panel-subtle); color: var(--primary); }.canvas-history-button:disabled { cursor: not-allowed; opacity: .35; }
 .run-detail-heading { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }.run-detail-code { margin-top: 8px; max-height: 260px; overflow: auto; white-space: pre-wrap; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-subtle); padding: 12px; font-size: 11px; line-height: 1.6; }
