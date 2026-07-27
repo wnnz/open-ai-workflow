@@ -11,6 +11,7 @@ defineProps<{
   tab: InspectorTab
   running?: boolean
   result?: any
+  nameError?: string
 }>()
 
 const emit = defineEmits<{
@@ -31,6 +32,7 @@ const { t } = useI18n()
       :node="node"
       :node-type="nodeType"
       :running="running"
+      :name-error="nameError"
       @update:label="emit('update:label', $event)"
       @update:description="emit('update:description', $event)"
       @run="emit('run')"

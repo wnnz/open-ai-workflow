@@ -80,7 +80,7 @@ const meta = computed(() => ({
       <div v-for="(category, index) in classifierCategories" :key="category.id || index" class="classifier-branch">
         <span class="classifier-index">{{ Number(index) + 1 }}</span><span class="truncate">{{ category.name || `${t('designer.categoryName')} ${Number(index) + 1}` }}</span>
         <Handle :id="classifierHandle(category)" type="source" :position="Position.Right" class="quick-add-handle classifier-handle">
-          <button type="button" :aria-label="`${t('workflow.addNode')} ${category.name || Number(index) + 1}`" @click.stop="quickAdd(classifierHandle(category), $event)"><Plus :size="10" :stroke-width="2.4" /></button>
+          <button type="button" :aria-label="`${t('workflow.addNode')} ${category.name || Number(index) + 1}`" @click.stop="quickAdd(classifierHandle(category), $event)"><Plus :size="12" :stroke-width="2.4" /></button>
         </Handle>
       </div>
     </div>
@@ -88,19 +88,19 @@ const meta = computed(() => ({
       <div v-for="(action, index) in humanActions" :key="action.id || index" class="classifier-branch">
         <span class="classifier-index">{{ Number(index) + 1 }}</span><span class="truncate">{{ action.label || action.id }}</span>
         <Handle :id="humanHandle(action)" type="source" :position="Position.Right" class="quick-add-handle classifier-handle">
-          <button type="button" :aria-label="`${t('workflow.addNode')} ${action.label || action.id}`" @click.stop="quickAdd(humanHandle(action), $event)"><Plus :size="10" :stroke-width="2.4" /></button>
+          <button type="button" :aria-label="`${t('workflow.addNode')} ${action.label || action.id}`" @click.stop="quickAdd(humanHandle(action), $event)"><Plus :size="12" :stroke-width="2.4" /></button>
         </Handle>
       </div>
     </div>
     <WorkflowNodeSummary v-else :node-type="nodeType" :config="data?.config" :fallback="meta.detail" />
     <Handle v-if="nodeType === 'condition'" id="true" type="source" :position="Position.Right" class="quick-add-handle" :style="{ top: '58%' }">
-      <button type="button" :aria-label="`${t('workflow.addNode')} IF`" @click.stop="quickAdd('true', $event)"><Plus :size="10" :stroke-width="2.4" /></button>
+      <button type="button" :aria-label="`${t('workflow.addNode')} IF`" @click.stop="quickAdd('true', $event)"><Plus :size="12" :stroke-width="2.4" /></button>
     </Handle>
     <Handle v-if="nodeType === 'condition'" id="false" type="source" :position="Position.Right" class="quick-add-handle" :style="{ top: '82%' }">
-      <button type="button" :aria-label="`${t('workflow.addNode')} ELSE`" @click.stop="quickAdd('false', $event)"><Plus :size="10" :stroke-width="2.4" /></button>
+      <button type="button" :aria-label="`${t('workflow.addNode')} ELSE`" @click.stop="quickAdd('false', $event)"><Plus :size="12" :stroke-width="2.4" /></button>
     </Handle>
     <Handle v-else-if="!['end','classifier','human'].includes(nodeType)" type="source" :position="Position.Right" class="quick-add-handle" :style="hasErrorBranch ? { top: '58%' } : undefined">
-      <button type="button" :aria-label="t('workflow.addNode')" @click.stop="quickAdd(undefined, $event)"><Plus :size="10" :stroke-width="2.4" /></button>
+      <button type="button" :aria-label="t('workflow.addNode')" @click.stop="quickAdd(undefined, $event)"><Plus :size="12" :stroke-width="2.4" /></button>
     </Handle>
     <Handle v-if="hasErrorBranch" id="error" type="source" :position="Position.Right" class="quick-add-handle error-handle" :style="{ top: '82%' }">
       <button type="button" :aria-label="t('designer.connectErrorBranch')" @click.stop="quickAdd('error', $event)"><AlertTriangle :size="9" :stroke-width="2.4" /></button>
@@ -117,7 +117,7 @@ const meta = computed(() => ({
 .node-menu:hover { background: var(--panel-subtle); }
 .condition-branches { margin-top: 9px; display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 10px; font-weight: 700; }.condition-branches span { display: flex; height: 23px; align-items: center; justify-content: center; border-radius: 5px; background: var(--panel-subtle); }
 .classifier-branches { margin-top: 9px; display: grid; gap: 5px; }.classifier-branch { position: relative; display: flex; height: 27px; align-items: center; gap: 6px; border-radius: 5px; background: var(--panel-subtle); padding: 0 8px; color: var(--node-color); font-size: 10px; font-weight: 600; }.classifier-index { display: flex; width: 16px; height: 16px; flex: none; align-items: center; justify-content: center; border-radius: 4px; background: color-mix(in srgb, var(--node-color), transparent 86%); font-size: 9px; }.classifier-handle { top: 50% !important; right: -13px !important; transform: translateY(-50%); }
-.quick-add-handle button { display: flex; width: 16px; height: 16px; align-items: center; justify-content: center; border: 1px solid var(--primary); border-radius: 50%; background: var(--panel); color: var(--primary); line-height: 0; box-shadow: 0 1px 3px rgb(16 24 40 / 12%); }
+.quick-add-handle button { display: flex; width: 20px; height: 20px; padding: 0; align-items: center; justify-content: center; border: 1px solid var(--primary); border-radius: 50%; background: var(--panel); color: var(--primary); line-height: 0; box-shadow: 0 1px 3px rgb(16 24 40 / 12%); }
 .quick-add-handle button svg { display: block; flex: none; }
 .quick-add-handle button:hover { background: var(--primary); color: white; }
 .error-handle button { border-color: #f79009; color: #dc6803; }.error-handle button:hover { background: #f79009; }

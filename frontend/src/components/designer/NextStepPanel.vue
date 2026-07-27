@@ -10,7 +10,6 @@ const { t } = useI18n()
 
 <template>
   <NodeConfigSection class="mt-5 border-t border-[var(--border)] pt-5" :title="t('designer.nextStep')" :hint="t('designer.connectHint')" :count="nodes.length" collapsible>
-    <template #actions><button type="button" class="icon-button" :title="t('designer.addNextNode')" @click="emit('add')"><Plus :size="14" /></button></template>
     <div class="space-y-2">
       <div v-for="node in nodes" :key="node.id" class="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)] p-2.5 text-xs">
         <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--primary-soft)] text-[var(--primary)]"><ChevronRight :size="14" /></span>

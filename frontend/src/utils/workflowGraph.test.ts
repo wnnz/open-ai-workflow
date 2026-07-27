@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { findAvailableNodePosition, insertNodeOnEdge, isConnectionAllowed, layoutWorkflow, replaceWorkflowNode, validateWorkflowGraph } from './workflowGraph'
+import { clearWorkflowEdgeSelection, findAvailableNodePosition, insertNodeOnEdge, isConnectionAllowed, layoutWorkflow, mergeWorkflowEdges, removeWorkflowEdgeById, replaceWorkflowNode, validateWorkflowGraph, type WorkflowEdgeLike } from './workflowGraph'
 
 const nodes = [
   { id: 'start', type: 'start', position: { x: 0, y: 0 }, data: { nodeType: 'start' } },
@@ -8,6 +8,31 @@ const nodes = [
 ]
 
 describe('workflow graph utilities', () => {
+  it('merges partial edge stores without dropping unrelated connections', () => {
+    const pending: WorkflowEdgeLike[] = [
+      { id: 'edge-1', source: 'start', target: 'task' },
+      { id: 'edge-2', source: 'task', target: 'end' },
+    ]
+    const runtime: WorkflowEdgeLike[] = [{ id: 'edge-2', source: 'task', target: 'end', data: { selected: true } }]
+    const merged = mergeWorkflowEdges(pending, runtime)
+
+    expect(merged).toHaveLength(2)
+    expect(merged.find(edge => edge.id === 'edge-2')?.data).toEqual({ selected: true })
+    expect(merged.filter(edge => edge.id !== 'edge-1')).toHaveLength(1)
+  })
+
+  it('keeps deselection and deletion as separate edge operations', () => {
+    const existing = [
+      { id: 'edge-1', source: 'start', target: 'task', selected: true },
+      { id: 'edge-2', source: 'task', target: 'end', selected: false },
+    ]
+
+    const deselected = clearWorkflowEdgeSelection(existing)
+    expect(deselected).toHaveLength(2)
+    expect(deselected.every(edge => edge.selected === false)).toBe(true)
+    expect(removeWorkflowEdgeById(deselected, 'edge-1')).toEqual([deselected[1]])
+  })
+
   it('places newly added nodes in the nearest open lane', () => {
     const occupied = [
       { id: 'start', type: 'start', position: { x: 80, y: 160 } },
@@ -25,8 +50,9 @@ describe('workflow graph utilities', () => {
   })
 
   it('rejects duplicate, reversed terminal, self, and cyclic connections', () => {
-    const edges = [{ id: 'a', source: 'start', target: 'task' }]
+    const edges = [{ id: 'a', source: 'start', target: 'task' }, { id: 'legacy-duplicate', source: 'start', target: 'task' }]
     expect(isConnectionAllowed(nodes, edges, { source: 'start', target: 'task' })).toBe(false)
+    expect(isConnectionAllowed(nodes, edges, { id: 'a', source: 'start', target: 'task' })).toBe(true)
     expect(isConnectionAllowed(nodes, edges, { source: 'end', target: 'task' })).toBe(false)
     expect(isConnectionAllowed(nodes, edges, { source: 'task', target: 'start' })).toBe(false)
     expect(isConnectionAllowed(nodes, edges, { source: 'task', target: 'task' })).toBe(false)

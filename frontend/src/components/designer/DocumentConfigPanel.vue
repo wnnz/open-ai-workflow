@@ -31,13 +31,13 @@ const inputFields = computed<NodeInputField[]>(() => {
   switch (props.config.operation) {
     case 'create':
       return [
-        { key: 'content', label: t('designer.documentContent'), type: 'String | Object', required: true, placeholder: '{{llm.text}}' },
-        { key: 'template_file', label: t('designer.templateFile'), type: 'File', placeholder: '{{inputs.template}}' },
+        { key: 'content', label: t('designer.documentContent'), type: 'String | Object', required: true, placeholder: t('designer.variableReferencePlaceholder') },
+        { key: 'template_file', label: t('designer.templateFile'), type: 'File', placeholder: t('designer.variableReferencePlaceholder') },
       ]
     case 'merge':
-      return [{ key: 'sources', label: t('designer.sourceFiles'), type: 'Array[File]', required: true, placeholder: '{{inputs.files}}' }]
+      return [{ key: 'sources', label: t('designer.sourceFiles'), type: 'Array[File]', required: true, placeholder: t('designer.variableReferencePlaceholder') }]
     default:
-      return [{ key: 'source', label: t('designer.sourceFile'), type: 'File', required: true, placeholder: '{{inputs.file}}' }]
+      return [{ key: 'source', label: t('designer.sourceFile'), type: 'File', required: true, placeholder: t('designer.variableReferencePlaceholder') }]
   }
 })
 </script>

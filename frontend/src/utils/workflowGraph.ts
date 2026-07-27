@@ -13,13 +13,40 @@ export type WorkflowEdgeLike = {
   markerStart?: string
   markerEnd?: string
 }
-export type WorkflowConnectionLike = { source?: string | null; target?: string | null }
+export type WorkflowConnectionLike = { id?: string; source?: string | null; target?: string | null }
 export type WorkflowValidationIssue = {
   code: string
   nodeId?: string
   params?: Record<string, string | number>
 }
 const executionPolicyNodeTypes = new Set(['llm', 'agent', 'code', 'script', 'template', 'variable', 'json', 'aggregate', 'extract', 'list', 'knowledge', 'http', 'iteration', 'loop', 'delay', 'subworkflow', 'document'])
+
+type MergeableWorkflowEdge = {
+  id?: string
+  source: string
+  target: string
+  sourceHandle?: unknown
+  targetHandle?: unknown
+}
+
+export function mergeWorkflowEdges<T extends MergeableWorkflowEdge>(...collections: T[][]): T[] {
+  const merged = new Map<string, T>()
+  for (const edges of collections) {
+    for (const edge of edges) {
+      const key = String(edge.id || `${edge.source}|${String(edge.sourceHandle || '')}|${edge.target}|${String(edge.targetHandle || '')}`)
+      merged.set(key, edge)
+    }
+  }
+  return [...merged.values()]
+}
+
+export function clearWorkflowEdgeSelection<T extends object>(edges: T[]): T[] {
+  return edges.map(edge => (edge as { selected?: boolean }).selected ? { ...edge, selected: false } : edge)
+}
+
+export function removeWorkflowEdgeById<T extends { id?: string }>(edges: T[], edgeId: string): T[] {
+  return edges.filter(edge => edge.id !== edgeId)
+}
 
 function nodeType(node: WorkflowNodeLike | undefined) {
   return String(node?.data?.nodeType || node?.type || '')
@@ -61,7 +88,8 @@ export function isConnectionAllowed(
   if ([source, target].some(id => nodeType(nodes.find(node => node.id === id)) === 'note')) return false
   if (nodeType(nodes.find(node => node.id === source)) === 'end') return false
   if (nodeType(nodes.find(node => node.id === target)) === 'start') return false
-  if (edges.some(edge => edge.source === source && edge.target === target)) return false
+  const existingConnection = Boolean(connection.id && edges.some(edge => edge.id === connection.id))
+  if (!existingConnection && edges.some(edge => edge.source === source && edge.target === target)) return false
   const sourceNode = nodes.find(node => node.id === source)
   const targetNode = nodes.find(node => node.id === target)
   if ((sourceNode?.parentNode || null) !== (targetNode?.parentNode || null)) return false

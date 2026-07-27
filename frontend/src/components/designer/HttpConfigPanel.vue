@@ -5,7 +5,6 @@ import VariableField from '@/components/VariableField.vue'
 import FormField from '@/components/ui/FormField.vue'
 import InputText from '@/volt/InputText.vue'
 import Select from '@/volt/Select.vue'
-import Textarea from '@/volt/Textarea.vue'
 import JsonEditorField from './JsonEditorField.vue'
 import NodeConfigSection from './NodeConfigSection.vue'
 
@@ -55,7 +54,7 @@ function changeBodyType(event: Event) {
         </Select>
       </FormField>
       <FormField v-if="config.auth.type === 'bearer'" class="mt-3" :label="t('designer.bearerToken')" compact>
-        <VariableField v-model="config.auth.token" class="font-mono" :groups="variableGroups" placeholder="{{inputs.token}}" />
+        <VariableField v-model="config.auth.token" class="font-mono" :groups="variableGroups" :placeholder="t('designer.variableReferencePlaceholder')" />
       </FormField>
       <div v-else-if="config.auth.type === 'basic'" class="mt-3 grid grid-cols-2 gap-2">
         <FormField :label="t('designer.username')" compact><VariableField v-model="config.auth.username" :groups="variableGroups" /></FormField>
@@ -64,12 +63,12 @@ function changeBodyType(event: Event) {
       <div v-else-if="config.auth.type === 'api_key'" class="mt-3 grid grid-cols-2 gap-2">
         <FormField :label="t('designer.apiKeyName')" compact><InputText v-model="config.auth.key" class="!h-9 font-mono" placeholder="X-API-Key" /></FormField>
         <FormField :label="t('designer.apiKeyLocation')" compact><Select v-model="config.auth.location" class="!h-9 !text-xs"><option value="header">Header</option><option value="query">Query</option></Select></FormField>
-        <FormField class="col-span-2" :label="t('designer.apiKeyValue')" compact><VariableField v-model="config.auth.value" class="font-mono" :groups="variableGroups" placeholder="{{inputs.api_key}}" /></FormField>
+        <FormField class="col-span-2" :label="t('designer.apiKeyValue')" compact><VariableField v-model="config.auth.value" class="font-mono" :groups="variableGroups" :placeholder="t('designer.variableReferencePlaceholder')" /></FormField>
       </div>
     </NodeConfigSection>
 
-    <JsonEditorField v-model="buffers.httpQuery" :label="t('designer.queryParameters')" :error="errors.httpQuery" height-class="h-24" @input="emit('structured', 'query', 'httpQuery')" />
-    <JsonEditorField v-model="buffers.httpHeaders" :label="t('designer.requestHeaders')" :error="errors.httpHeaders" height-class="h-28" @input="emit('structured', 'headers', 'httpHeaders')" />
+    <JsonEditorField v-model="buffers.httpQuery" :label="t('designer.queryParameters')" :error="errors.httpQuery" :groups="variableGroups" height-class="h-24" @input="emit('structured', 'query', 'httpQuery')" />
+    <JsonEditorField v-model="buffers.httpHeaders" :label="t('designer.requestHeaders')" :error="errors.httpHeaders" :groups="variableGroups" height-class="h-28" @input="emit('structured', 'headers', 'httpHeaders')" />
 
     <NodeConfigSection :title="t('designer.requestBody')">
       <FormField :label="t('designer.bodyType')" compact>
@@ -77,8 +76,8 @@ function changeBodyType(event: Event) {
           <option v-for="type in ['none', 'json', 'raw', 'form']" :key="type" :value="type">{{ t(`designer.bodyTypes.${type}`) }}</option>
         </Select>
       </FormField>
-      <Textarea v-if="config.body_type === 'raw'" v-model="config.body" class="mt-3 h-32 font-mono !text-xs" :placeholder="t('designer.rawBodyPlaceholder')" />
-      <JsonEditorField v-else-if="config.body_type !== 'none'" v-model="buffers.httpBody" class="mt-3" :label="config.body_type === 'form' ? t('designer.formBody') : 'JSON'" :error="errors.httpBody" height-class="h-32" @input="emit('structured', 'body', 'httpBody')" />
+      <VariableField v-if="config.body_type === 'raw'" v-model="config.body" class="mt-3" :groups="variableGroups" multiline control-class="h-32 font-mono !text-xs" :placeholder="t('designer.rawBodyPlaceholder')" />
+      <JsonEditorField v-else-if="config.body_type !== 'none'" v-model="buffers.httpBody" class="mt-3" :label="config.body_type === 'form' ? t('designer.formBody') : 'JSON'" :error="errors.httpBody" :groups="variableGroups" height-class="h-32" @input="emit('structured', 'body', 'httpBody')" />
     </NodeConfigSection>
 
     <div class="grid grid-cols-2 gap-2">

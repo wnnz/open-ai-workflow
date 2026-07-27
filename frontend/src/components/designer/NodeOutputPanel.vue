@@ -17,7 +17,7 @@ function descriptionKey(name: string) {
 </script>
 
 <template>
-  <NodeConfigSection v-if="variables.length" class="mt-5 border-t border-[var(--border)] pt-5" :title="t('designer.outputVariables')" :count="variables.length" collapsible :default-expanded="false">
+  <NodeConfigSection v-if="variables.length" class="mt-5 border-t border-[var(--border)] pt-5" :title="t('designer.outputVariables')" :count="variables.length" collapsible>
     <div class="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--panel)]">
       <button v-for="variable in variables" :key="variable.path" type="button" class="grid w-full grid-cols-[minmax(0,1fr)_82px_24px] items-center gap-2 border-b border-[var(--border)] px-3 py-2.5 text-left last:border-0 hover:bg-[var(--panel-subtle)]" :title="t('designer.copyVariable')" @click="emit('copy', variable.path)">
         <span class="min-w-0"><span class="block truncate font-mono text-[11px] font-semibold">{{ variable.label }}</span><span class="muted mt-0.5 block text-[10px] leading-4">{{ t(`designer.outputDescriptions.${descriptionKey(variable.label)}`) }}</span></span>

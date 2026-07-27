@@ -11,7 +11,7 @@ const candidate = ref('')
 
 function ensureConfig() {
   props.config.strategy ||= 'tool_calling'
-  props.config.query ||= '{{inputs.message}}'
+  if (typeof props.config.query !== 'string') props.config.query = ''
   props.config.tools = Array.isArray(props.config.tools) ? props.config.tools : []
   props.config.memory = { enabled: false, window: 10, ...(props.config.memory || {}) }
   if (props.config.return_intermediate_steps == null) props.config.return_intermediate_steps = false

@@ -4,7 +4,7 @@ import { AlertTriangle, BookOpen, Bot, Braces, BrainCircuit, CircleHelp, CircleS
 import { useI18n } from 'vue-i18n'
 import NodeActionMenu, { type NodeAction } from '@/components/designer/NodeActionMenu.vue'
 
-const props = defineProps<{ node: any; nodeType: string; running?: boolean }>()
+const props = defineProps<{ node: any; nodeType: string; running?: boolean; nameError?: string }>()
 const emit = defineEmits<{
   run: []
   help: []
@@ -34,8 +34,9 @@ function nodeAction(action: NodeAction) {
     <div class="flex items-start gap-3 px-4 pb-2 pt-4">
       <span class="node-type-icon" :class="`tone-${meta.tone}`"><component :is="meta.icon" :size="17" /></span>
       <div class="min-w-0 flex-1">
-        <input :value="node.data?.label" class="node-title-input" :aria-label="t('designer.editNodeTitle')" :placeholder="t('designer.addNodeTitle')" @input="emit('update:label', ($event.target as HTMLInputElement).value)" />
-        <div class="mt-0.5 text-[10px] font-medium text-[var(--muted)]">{{ t(`workflow.nodes.${nodeType}`) }} · {{ node.id }}</div>
+        <input :value="node.data?.label" class="node-title-input" :aria-invalid="Boolean(nameError)" :aria-label="t('designer.editNodeTitle')" :placeholder="t('designer.addNodeTitle')" @input="emit('update:label', ($event.target as HTMLInputElement).value)" />
+        <div v-if="nameError" class="mt-0.5 text-[10px] font-medium text-red-600">{{ nameError }}</div>
+        <div v-else class="mt-0.5 text-[10px] font-medium text-[var(--muted)]">{{ t(`workflow.nodes.${nodeType}`) }}</div>
       </div>
       <button v-if="nodeType !== 'note'" type="button" class="icon-button" :title="t('designer.runStep')" :aria-label="t('designer.runStep')" :disabled="running" @click="emit('run')"><Play :size="15" /></button>
       <button type="button" class="icon-button" :title="t('designer.nodeHelp')" :aria-label="t('designer.nodeHelp')" @click="emit('help')"><CircleHelp :size="15" /></button>

@@ -47,7 +47,7 @@ function removeContainer() {
       <button class="container-add nodrag" type="button" @click.stop="addInside($event)"><Plus :size="14" />{{ t('designer.addInnerNode') }}</button>
     </div>
     <Handle type="source" :position="Position.Right" class="quick-add-handle">
-      <button type="button" :aria-label="t('workflow.addNode')" @click.stop="quickAdd($event)"><Plus :size="10" :stroke-width="2.4" /></button>
+      <button type="button" :aria-label="t('workflow.addNode')" @click.stop="quickAdd($event)"><Plus :size="12" :stroke-width="2.4" /></button>
     </Handle>
   </section>
 </template>
@@ -63,6 +63,6 @@ function removeContainer() {
 .container-add { position: absolute; left: 117px; top: 74px; display: flex; height: 34px; align-items: center; gap: 6px; border: 1px dashed color-mix(in srgb, var(--container-color), transparent 45%); border-radius: 7px; background: var(--panel); padding: 0 11px; color: var(--container-color); font-size: 10px; font-weight: 600; }
 .container-add:hover { border-style: solid; background: color-mix(in srgb, var(--container-color), transparent 94%); }
 .node-menu { width: 20px; height: 20px; border-radius: 5px; color: var(--muted); font-size: 13px; line-height: 12px; }.node-menu:hover { background: var(--panel-subtle); }
-.quick-add-handle button { display: flex; width: 16px; height: 16px; align-items: center; justify-content: center; border: 1px solid var(--primary); border-radius: 50%; background: var(--panel); color: var(--primary); line-height: 0; box-shadow: 0 1px 3px rgb(16 24 40 / 12%); }.quick-add-handle button:hover { background: var(--primary); color: white; }
+.quick-add-handle button { display: flex; width: 20px; height: 20px; padding: 0; align-items: center; justify-content: center; border: 1px solid var(--primary); border-radius: 50%; background: var(--panel); color: var(--primary); line-height: 0; box-shadow: 0 1px 3px rgb(16 24 40 / 12%); }.quick-add-handle button:hover { background: var(--primary); color: white; }
 .is-iteration { --container-color: #155eef; }.is-loop { --container-color: #7f56d9; }
 </style>

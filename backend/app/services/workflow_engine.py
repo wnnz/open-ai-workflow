@@ -19,7 +19,7 @@ from jinja2.sandbox import SandboxedEnvironment
 from app.core.config import get_settings
 from app.services.scripts import validate_script
 
-VARIABLE = re.compile(r"\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}")
+VARIABLE = re.compile(r"\{\{\s*([^{}\r\n]+?)\s*\}\}")
 EXECUTION_POLICY_NODE_TYPES = {
     "llm", "agent", "code", "script", "template", "variable", "json", "aggregate",
     "extract", "list", "knowledge", "http", "iteration", "loop",
@@ -35,6 +35,33 @@ class WorkflowPause(Exception):
         self.resume_state = resume_state
 
 
+def node_reference_name(node: dict[str, Any]) -> str:
+    return str(node.get("data", {}).get("label") or "").strip()
+
+
+def validate_node_names(nodes: list[dict[str, Any]]) -> None:
+    names: set[str] = set()
+    for node in nodes:
+        name = node_reference_name(node)
+        if not name:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Every node requires a name")
+        if any(character in name for character in ".{}"):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Node names cannot contain '.', '{', or '}'")
+        key = name.casefold()
+        if key in {"inputs", "env", "sys"}:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Node name is reserved")
+        if key in names:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Graph requires unique node names")
+        names.add(key)
+
+
+def store_node_output(context: dict[str, Any], node: dict[str, Any], output: Any, graph: dict[str, Any]) -> None:
+    context[str(node["id"])] = output
+    name = node_reference_name(node)
+    if name and sum(node_reference_name(item).casefold() == name.casefold() for item in graph.get("nodes", [])) == 1:
+        context[name] = output
+
+
 def validate_draft_graph(graph: dict[str, Any]) -> None:
     """Validate graph integrity without rejecting intentionally incomplete draft nodes."""
     nodes = graph.get("nodes", [])
@@ -44,6 +71,7 @@ def validate_draft_graph(graph: dict[str, Any]) -> None:
     node_ids = [node.get("id") for node in nodes]
     if not node_ids or None in node_ids or len(set(node_ids)) != len(node_ids):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Graph requires unique node ids")
+    validate_node_names(nodes)
     top_level_nodes = [node for node in nodes if not node.get("parentNode")]
     if len([node for node in top_level_nodes if node.get("type") == "start"]) != 1:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Graph requires exactly one start node")
@@ -798,7 +826,7 @@ def resolve_value(value: Any, context: dict[str, Any]) -> Any:
 
 def lookup(context: dict[str, Any], path: str) -> Any:
     current: Any = context
-    for part in path.split("."):
+    for part in (segment.strip() for segment in path.split(".")):
         if not isinstance(current, dict):
             return None
         current = current.get(part)
@@ -985,7 +1013,7 @@ def execute_graph(
                         "visited": visited,
                     },
                 ) from pause
-            context[node_id] = output
+            store_node_output(context, node, output, graph)
             finished = datetime.now(UTC)
             duration_ms = (finished - started).total_seconds() * 1000
             trace.append(
@@ -1067,7 +1095,7 @@ def execute_container_body(
         execution_status = "succeeded"
         if node_id in reachable:
             output, execution_status, _, _ = execute_node_with_policy(node, context, graph)
-            context[node_id] = output
+            store_node_output(context, node, output, graph)
             last_output = output
         visited += 1
         active_branch = None
@@ -1107,7 +1135,7 @@ def execute_container_node(
             index, item = index_item
             nested_context = deepcopy(context)
             nested_context[item_variable] = item
-            nested_context[node_id] = {item_variable: item, "item": item, "index": index}
+            store_node_output(nested_context, node, {item_variable: item, "item": item, "index": index}, graph)
             output, _ = execute_container_body(graph, node, nested_context)
             return output
 
@@ -1124,7 +1152,7 @@ def execute_container_node(
     iterations = 0
     loop_context = deepcopy(context)
     for index in range(maximum):
-        loop_context[node_id] = {"index": index, "iteration": index + 1, "previous": last_output}
+        store_node_output(loop_context, node, {"index": index, "iteration": index + 1, "previous": last_output}, graph)
         last_output, loop_context = execute_container_body(graph, node, loop_context)
         iterations = index + 1
         if bool(resolve_value(raw_config.get("condition"), loop_context)):

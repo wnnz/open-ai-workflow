@@ -2,6 +2,7 @@
 import { Plus, Trash2 } from 'lucide-vue-next'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import VariableField from '@/components/VariableField.vue'
 import type { WorkflowVariableGroup } from '@/utils/workflowVariables'
 import InputText from '@/volt/InputText.vue'
 import Select from '@/volt/Select.vue'
@@ -33,7 +34,7 @@ function removeFilter(index: number) { props.config.metadata_filter.conditions.s
 
 <template>
   <section class="mt-5 space-y-5">
-    <NodeInputPanel :config="config" :fields="[{ key: 'query', label: t('designer.queryText'), type: 'String', required: true, placeholder: '{{inputs.message}}' }]" :variable-groups="variableGroups" />
+    <NodeInputPanel :config="config" :fields="[{ key: 'query', label: t('designer.queryText'), type: 'String', required: true, placeholder: t('designer.variableReferencePlaceholder') }]" :variable-groups="variableGroups" />
 
     <section>
       <div class="flex items-center"><div><h3 class="text-xs font-semibold">{{ t('designer.knowledgeBases') }} <span class="text-red-500">*</span></h3><p class="muted mt-1 text-[11px]">{{ t('designer.knowledgeBasesHint') }}</p></div><span class="muted ml-auto text-[10px]">{{ config.dataset_ids.length }}</span></div>
@@ -64,7 +65,7 @@ function removeFilter(index: number) { props.config.metadata_filter.conditions.s
       <div class="flex items-center gap-3"><div class="min-w-0 flex-1"><h3 class="text-xs font-semibold">{{ t('designer.metadataFilter') }}</h3><p class="muted mt-1 text-[11px]">{{ t('designer.metadataFilterHint') }}</p></div><ToggleSwitch v-model="config.metadata_filter.enabled" :label="t('designer.metadataFilter')" /></div>
       <div v-if="config.metadata_filter.enabled" class="mt-3 border-t border-[var(--border)] pt-3">
         <div class="flex items-center"><Select v-model="config.metadata_filter.logical_operator" class="!h-8 !w-24 !text-xs"><option value="and">AND</option><option value="or">OR</option></Select><button type="button" class="icon-button ml-auto" :aria-label="t('designer.addMetadataCondition')" @click="addFilter"><Plus :size="13" /></button></div>
-        <div class="mt-2 space-y-2"><div v-for="(condition, index) in config.metadata_filter.conditions" :key="index" class="grid grid-cols-[1fr_100px_1fr_30px] gap-2"><InputText v-model="condition.key" class="!h-8" :placeholder="t('designer.metadataKey')" /><Select v-model="condition.operator" class="!h-8 !text-xs"><option value="equals">=</option><option value="not_equals">≠</option><option value="contains">{{ t('designer.contains') }}</option><option value="in">IN</option></Select><InputText v-model="condition.value" class="!h-8" :placeholder="t('designer.metadataValue')" /><button type="button" class="icon-button !h-8 !w-8 text-red-600" :aria-label="t('designer.removeMetadataCondition')" @click="removeFilter(Number(index))"><Trash2 :size="13" /></button></div></div>
+        <div class="mt-2 space-y-2"><div v-for="(condition, index) in config.metadata_filter.conditions" :key="index" class="grid grid-cols-[1fr_100px_1fr_30px] items-center gap-2"><InputText v-model="condition.key" class="!h-8" :placeholder="t('designer.metadataKey')" /><Select v-model="condition.operator" class="!h-8 !text-xs"><option value="equals">=</option><option value="not_equals">≠</option><option value="contains">{{ t('designer.contains') }}</option><option value="in">IN</option></Select><VariableField v-model="condition.value" :groups="variableGroups" control-class="!h-8" :placeholder="t('designer.metadataValue')" /><button type="button" class="icon-button !h-8 !w-8 text-red-600" :aria-label="t('designer.removeMetadataCondition')" @click="removeFilter(Number(index))"><Trash2 :size="13" /></button></div></div>
         <button v-if="!config.metadata_filter.conditions.length" type="button" class="mt-2 w-full rounded-md border border-dashed border-[var(--border)] py-3 text-[11px] text-[var(--muted)]" @click="addFilter"><Plus class="mr-1 inline" :size="12" />{{ t('designer.addMetadataCondition') }}</button>
       </div>
     </section>

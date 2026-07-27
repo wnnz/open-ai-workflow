@@ -22,7 +22,7 @@ function selectTarget() {
   const nextInputs: Record<string, any> = {}
   for (const field of inputFields.value) {
     const name = String(field.name || '')
-    if (name) nextInputs[name] = props.config.inputs?.[name] ?? `{{inputs.${name}}}`
+    if (name) nextInputs[name] = props.config.inputs?.[name] ?? ''
   }
   props.config.inputs = nextInputs
 }
@@ -50,7 +50,7 @@ function selectTarget() {
       <div v-if="inputFields.length" class="mt-3 space-y-3">
         <label v-for="field in inputFields" :key="field.name" class="field-label">
           <span class="flex items-center gap-1">{{ field.label || field.name }}<code class="muted text-[9px]">{{ field.name }}</code><span v-if="field.required" class="text-red-500">*</span></span>
-          <VariableField v-model="config.inputs[field.name]" class="mt-1.5" :groups="variableGroups" :placeholder="`{{inputs.${field.name}}}`" />
+          <VariableField v-model="config.inputs[field.name]" class="mt-1.5" :groups="variableGroups" :placeholder="$t('designer.variableReferencePlaceholder')" />
         </label>
       </div>
       <p v-else class="resource-empty mt-3">{{ $t('designer.noWorkflowInputs') }}</p>

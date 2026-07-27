@@ -1,4 +1,5 @@
 import type { WorkflowEdgeLike, WorkflowNodeLike } from './workflowGraph'
+import { nodeReferenceName } from './workflowNodeNames'
 
 export type WorkflowVariable = {
   path: string
@@ -19,7 +20,7 @@ function nodeType(node: WorkflowNodeLike) {
 export function getNodeOutputVariables(node: WorkflowNodeLike): WorkflowVariable[] {
   const type = nodeType(node)
   const config = node.data?.config || {}
-  const prefix = node.id
+  const prefix = nodeReferenceName(node) || node.id
   const fixed: Record<string, Array<[string, string]>> = {
     llm: [['text', 'String']],
     agent: [['text', 'String'], ['tool_calls', 'Array']],
@@ -100,8 +101,9 @@ export function getNodeOutputVariables(node: WorkflowNodeLike): WorkflowVariable
 function variablesForNode(node: WorkflowNodeLike): WorkflowVariable[] {
   const type = nodeType(node)
   if (type === 'start') {
+    const prefix = nodeReferenceName(node) || node.id
     return (node.data?.config?.input_fields || []).filter((field: any) => field?.name).map((field: any) => ({
-      path: `inputs.${field.name}`,
+      path: `${prefix}.${field.name}`,
       label: field.label || field.name,
       type: field.type === 'files' ? 'Array[File]' : field.type === 'file' ? 'File' : field.type === 'number' ? 'Number' : 'String',
     }))
@@ -117,15 +119,18 @@ export function buildAllVariableCatalog(nodes: WorkflowNodeLike[]): WorkflowVari
   })).filter(group => group.variables.length)
 }
 
-export function readRuntimeVariable(path: string, nodeResults: Record<string, any>) {
-  const parts = path.split('.')
+export function readRuntimeVariable(path: string, nodeResults: Record<string, any>, nodes: WorkflowNodeLike[] = []) {
+  const parts = path.split('.').map(part => part.trim())
   let current: any
   if (parts[0] === 'inputs') {
     const startTrace = Object.values(nodeResults).find((trace: any) => trace?.node_type === 'start') as any
     current = startTrace?.output
     parts.shift()
   } else {
-    current = nodeResults[parts.shift()!]?.output
+    const reference = parts.shift()!
+    const node = nodes.find(item => nodeReferenceName(item) === reference)
+      || nodes.find(item => nodeReferenceName(item).toLocaleLowerCase() === reference.toLocaleLowerCase())
+    current = nodeResults[node?.id || reference]?.output
   }
   for (const part of parts) {
     if (current == null) return undefined

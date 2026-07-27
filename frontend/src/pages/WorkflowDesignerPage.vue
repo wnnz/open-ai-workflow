@@ -60,9 +60,10 @@ import Button from '@/volt/Button.vue'
 import InputText from '@/volt/InputText.vue'
 import Select from '@/volt/Select.vue'
 import Textarea from '@/volt/Textarea.vue'
-import { findAvailableNodePosition, insertNodeOnEdge, isConnectionAllowed, layoutWorkflow, replaceWorkflowNode, validateWorkflowGraph, type WorkflowValidationIssue } from '@/utils/workflowGraph'
+import { clearWorkflowEdgeSelection, findAvailableNodePosition, insertNodeOnEdge, isConnectionAllowed, layoutWorkflow, mergeWorkflowEdges, removeWorkflowEdgeById, replaceWorkflowNode, validateWorkflowGraph, type WorkflowValidationIssue } from '@/utils/workflowGraph'
 import { coerceWorkflowInputValues, createWorkflowInputValues } from '@/utils/workflowInputs'
 import { buildRunOverlay, clearRunOverlay as clearGraphRunOverlay, stripRuntimeData } from '@/utils/workflowRunOverlay'
+import { allocateDefaultNodeName, ensureUniqueNodeNames, nextUniqueNodeName, nodeReferenceName, rewriteNodeReferences, validateNodeName, type NodeNameError, type NodeRename } from '@/utils/workflowNodeNames'
 import { buildAllVariableCatalog, buildVariableCatalog, readRuntimeVariable } from '@/utils/workflowVariables'
 import { normalizeWorkflowComments, type WorkflowCommentThread } from '@/types/workflowComments'
 import { SYSTEM_VARIABLES } from '@/types/workflowSystemVariables'
@@ -71,9 +72,8 @@ const { t } = useI18n()
 const CodeConfigPanel = defineAsyncComponent(() => import('@/components/designer/CodeConfigPanel.vue'))
 const route = useRoute(); const router = useRouter()
 const auth = useAuthStore(); const preferences = usePreferencesStore(); const workspaces = useWorkspacesStore()
-const { addEdges, addNodes, fitView, getEdges, onConnect, screenToFlowCoordinate, setCenter, setEdges, viewport, zoomIn, zoomOut } = useVueFlow()
+const { addNodes, addSelectedNodes, fitView, getNodes, onConnect, removeSelectedNodes, screenToFlowCoordinate, setCenter, viewport, zoomIn, zoomOut } = useVueFlow()
 const workflow = ref<any>(null); const nodes = ref<Node[]>([]); const edges = ref<Edge[]>([])
-const pendingGraphEdges = new Map<string, Edge>()
 const selected = ref<Node | null>(null); const saving = ref(false); const running = ref(false); const publishing = ref(false)
 const result = ref<any>(null); const inspectorTab = ref<InspectorTab>('settings'); const paletteOpen = ref(false)
 const paletteSourceId = ref<string | null>(null)
@@ -85,6 +85,7 @@ const paletteQuery = ref(''); const configText = ref('{}'); const configError = 
 const paletteTab = ref<'nodes' | 'tools' | 'snippets'>('nodes')
 const palettePosition = ref({ x: 64, y: 80 })
 const interactionMode = ref<'pointer' | 'hand'>('pointer')
+const middlePanning = ref(false)
 const showCommandPalette = ref(false)
 const annotationMode = ref(false); const annotationColor = ref('yellow')
 const commentMode = ref(false); const showComments = ref(false); const selectedCommentId = ref<string | null>(null)
@@ -108,6 +109,7 @@ const showSystemVariables = ref(false)
 const environmentPanel = ref<{ markSaved: () => void } | null>(null)
 const configBuffers = ref({ scriptInputs: '{}', values: '{}', jsonValue: '{}', httpHeaders: '{}', httpQuery: '{}', httpBody: '', llmSchema: '{}' })
 const configFieldErrors = ref<Record<string, string>>({}); const configEditing = ref(false)
+const nodeNameError = ref('')
 type GraphState = { nodes: any[]; edges: any[]; comments?: WorkflowCommentThread[] }
 const graphHistory = ref<GraphState[]>([]); const historyIndex = ref(-1); const copiedGraph = ref<GraphState | null>(null)
 const historyTimes = ref<Date[]>([])
@@ -117,7 +119,7 @@ const selectedType = computed(() => String(selected.value?.data?.nodeType || sel
 const environmentVariableGroup = computed(() => ({ nodeId: 'env', label: t('designer.environmentVariables'), variables: environmentVariables.value.map(variable => ({ path: `env.${variable.name}`, label: variable.description || variable.name, type: variable.value_type === 'number' ? 'Number' : 'String' })) }))
 const systemVariableGroup = computed(() => ({ nodeId: 'sys', label: t('designer.systemVariables'), variables: SYSTEM_VARIABLES.map(variable => ({ path: `sys.${variable.name}`, label: t(`designer.systemVariableDescriptions.${variable.name}`), type: variable.type })) }))
 const globalVariableGroups = computed(() => [systemVariableGroup.value, ...(environmentVariables.value.length ? [environmentVariableGroup.value] : [])])
-const variableGroups = computed(() => selected.value ? [...globalVariableGroups.value, ...buildVariableCatalog(nodes.value as any[], edges.value as any[], selected.value.id)] : [])
+const variableGroups = computed(() => selected.value ? [...globalVariableGroups.value, ...buildVariableCatalog(nodes.value as any[], currentCanvasEdges() as any[], selected.value.id)] : [])
 const allVariableGroups = computed(() => [...globalVariableGroups.value, ...buildAllVariableCatalog(nodes.value as any[])])
 const filteredVariableGroups = computed(() => {
   const query = variableSearch.value.trim().toLocaleLowerCase()
@@ -135,13 +137,13 @@ const runNodeLabels = computed<Record<string, string>>(() => Object.fromEntries(
 const pendingApprovals = computed(() => approvals.value.filter(item => item.status === 'pending'))
 const nextNodes = computed<any[]>(() => {
   if (!selected.value) return []
-  const targets = new Set((edges.value as any[]).filter(edge => edge.source === selected.value!.id).map(edge => edge.target))
+  const targets = new Set((currentCanvasEdges() as any[]).filter(edge => edge.source === selected.value!.id).map(edge => edge.target))
   return (nodes.value as any[]).filter(node => targets.has(node.id))
 })
 const canUndo = computed(() => historyIndex.value > 0); const canRedo = computed(() => historyIndex.value < graphHistory.value.length - 1)
 const zoomPercent = computed(() => Math.round(viewport.value.zoom * 100))
 const paletteStyle = computed(() => ({ left: `${palettePosition.value.x}px`, top: `${palettePosition.value.y}px` }))
-const validationIssues = computed(() => validateWorkflowGraph(nodes.value as any[], edges.value as any[]))
+const validationIssues = computed(() => validateWorkflowGraph(nodes.value as any[], currentCanvasEdges() as any[]))
 const actionableSelectionCount = computed(() => selectedCanvasNodes().length)
 const visibleCommentPins = computed(() => comments.value.map((comment, index) => ({ comment, index: index + 1 })))
 const contextMenuProtected = computed(() => {
@@ -264,11 +266,11 @@ function classifierBranchLabel(node: any, sourceHandle: string | null | undefine
 
 function syncClassifierEdgeLabels() {
   const nodeById = new Map((nodes.value as any[]).map(node => [node.id, node]))
-  edges.value = (edges.value as any[]).map(edge => {
+  commitEdges(currentCanvasEdges().map(edge => {
     const label = classifierBranchLabel(nodeById.get(edge.source), edge.sourceHandle)
     if (!label || edge.data?.branchLabel === label) return edge
     return { ...edge, data: { ...(edge.data || {}), branchLabel: label } }
-  }) as Edge[]
+  }) as Edge[])
 }
 
 function normalizeEndOutputs(outputs: any, inputFields: any[]) {
@@ -317,9 +319,64 @@ function normalizeHumanConfig(config: any) {
   return normalized
 }
 
+function renameNodesAndReferences(currentNodes: any[], renames: NodeRename[]) {
+  if (!renames.length) return currentNodes
+  const references = renames.filter(rename => rename.from && currentNodes.filter(node => nodeReferenceName(node) === rename.from).length === 1)
+  return currentNodes.map(node => {
+    const rename = renames.find(item => item.id === node.id)
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        ...(rename ? { label: rename.to } : {}),
+        config: rewriteNodeReferences(node.data?.config || {}, references),
+      },
+    }
+  })
+}
+
+function replaceReferences(currentNodes: any[], renames: Array<Pick<NodeRename, 'from' | 'to'>>) {
+  return currentNodes.map(node => ({
+    ...node,
+    data: { ...node.data, config: rewriteNodeReferences(node.data?.config || {}, renames) },
+  }))
+}
+
+function startReferenceName(currentNodes: any[] = nodes.value as any[]) {
+  const start = currentNodes.find(node => String(node.data?.nodeType || node.type) === 'start')
+  return start ? nodeReferenceName(start) : t('workflow.nodes.start')
+}
+
+function withNamedStartReferences<T>(value: T, currentNodes: any[] = nodes.value as any[]): T {
+  return rewriteNodeReferences(value, [{ from: 'inputs', to: startReferenceName(currentNodes) }])
+}
+
+function nodeNameErrorText(error: NodeNameError) {
+  return t(`designer.nodeNameErrors.${error}`)
+}
+
+function updateSelectedNodeLabel(value: string) {
+  if (!selected.value) return
+  const name = value.trim()
+  const error = validateNodeName(nodes.value as any[], selected.value.id, name)
+  if (error) {
+    nodeNameError.value = nodeNameErrorText(error)
+    return
+  }
+  const oldName = nodeReferenceName(selected.value as any)
+  nodeNameError.value = ''
+  if (oldName === name) return
+  const renamed = renameNodesAndReferences(nodes.value as any[], [{ id: selected.value.id, from: oldName, to: name }])
+  nodes.value = renamed as Node[]
+  selected.value = (renamed.find(node => node.id === selected.value!.id) || null) as Node | null
+  syncConfigEditor()
+}
+
+function currentCanvasEdges() {
+  return edges.value as Edge[]
+}
+
 function graphSnapshot() {
-  const snapshotEdges = new Map<string, any>()
-  for (const edge of [...(edges.value as any[]), ...(getEdges.value as any[]), ...pendingGraphEdges.values()]) snapshotEdges.set(edge.id, edge)
   const persisted = {
     nodes: (nodes.value as any[]).map(node => ({
       id: node.id,
@@ -331,7 +388,7 @@ function graphSnapshot() {
       style: node.style,
       data: stripRuntimeData(node.data),
     })),
-    edges: [...snapshotEdges.values()].map(edge => ({
+    edges: currentCanvasEdges().map(edge => ({
       id: edge.id,
       source: edge.source,
       target: edge.target,
@@ -357,7 +414,7 @@ function restoreHistory(index: number) {
   const snapshot = graphHistory.value[index]
   if (!snapshot) return
   restoringHistory = true
-  nodes.value = JSON.parse(JSON.stringify(snapshot.nodes)); edges.value = JSON.parse(JSON.stringify(snapshot.edges)); comments.value = normalizeWorkflowComments(snapshot.comments); historyIndex.value = index; selected.value = null; selectedCommentId.value = null
+  nodes.value = JSON.parse(JSON.stringify(snapshot.nodes)); commitEdges(JSON.parse(JSON.stringify(snapshot.edges))); comments.value = normalizeWorkflowComments(snapshot.comments); historyIndex.value = index; selected.value = null; selectedCommentId.value = null
   setTimeout(() => { restoringHistory = false }, 0)
 }
 function undo() { clearTimeout(historyTimer); pushHistory(); if (canUndo.value) restoreHistory(historyIndex.value - 1) }
@@ -369,7 +426,8 @@ async function load() {
   workflow.value = data
   const draftStart = data.draft_graph.nodes.find((node: any) => String(node.data?.nodeType || node.type) === 'start')
   const draftInputFields = draftStart?.data?.config?.input_fields || []
-  nodes.value = data.draft_graph.nodes.map((node: Node) => {
+  const localizedRenames: NodeRename[] = []
+  let loadedNodes = data.draft_graph.nodes.map((node: Node) => {
     const nodeType = String(node.data?.nodeType || node.type)
     const defaults: Record<string, string[]> = { start: ['Start', '开始'], end: ['End', '结束'] }
     const baseConfig = nodeType === 'start' ? {
@@ -382,6 +440,8 @@ async function load() {
       outputs: normalizeEndOutputs(node.data?.config?.outputs, draftInputFields),
     } : nodeType === 'condition' ? normalizeConditionConfig(node.data?.config) : nodeType === 'classifier' ? normalizeClassifierConfig(node.data?.config) : nodeType === 'llm' ? normalizeLlmConfig(node.data?.config) : nodeType === 'human' ? normalizeHumanConfig(node.data?.config) : { ...defaultNodeConfig(nodeType), ...(node.data?.config || {}) }
     const config = normalizeExecutionPolicy(nodeType, baseConfig)
+    const label = defaults[nodeType]?.includes(String(node.data?.label)) ? t(`workflow.nodes.${nodeType}`) : node.data?.label
+    if (String(node.data?.label || '').trim() && String(node.data?.label).trim() !== String(label || '').trim()) localizedRenames.push({ id: node.id, from: String(node.data?.label).trim(), to: String(label || '').trim() })
     return {
       id: node.id,
       type: node.type,
@@ -390,22 +450,26 @@ async function load() {
       extent: (node as any).extent,
       expandParent: (node as any).expandParent,
       style: (node as any).style,
-      data: { ...node.data, config, nodeType, label: defaults[nodeType]?.includes(String(node.data?.label)) ? t(`workflow.nodes.${nodeType}`) : node.data?.label },
+      data: { ...node.data, config, nodeType, label },
     }
   })
+  loadedNodes = replaceReferences(loadedNodes, localizedRenames)
+  const uniqueNames = ensureUniqueNodeNames(loadedNodes, (node: any) => t(`workflow.nodes.${String(node.data?.nodeType || node.type || 'default')}`))
+  loadedNodes = uniqueNames.nodes
+  const beforeReferenceMigration = JSON.stringify(loadedNodes.map((node: any) => node.data?.config || {}))
+  loadedNodes = replaceReferences(loadedNodes, [{ from: 'inputs', to: startReferenceName(loadedNodes) }])
+  const migrated = Boolean(localizedRenames.length || uniqueNames.renames.length || beforeReferenceMigration !== JSON.stringify(loadedNodes.map((node: any) => node.data?.config || {})))
+  nodes.value = loadedNodes as Node[]
   const loadedEdges = data.draft_graph.edges.map((edge: Edge) => ({ ...edge, type: 'workflow' }))
-  edges.value = []
-  pendingGraphEdges.clear()
+  commitEdges(loadedEdges)
   comments.value = normalizeWorkflowComments(data.draft_graph.comments)
-  await nextTick()
-  addEdges(loadedEdges)
-  for (const edge of loadedEdges) pendingGraphEdges.set(edge.id, edge)
   syncClassifierEdgeLabels()
   runtimeRunId.value = ''; nodeResults.value = {}
   resetHistory()
   await nextTick()
   editRevision.value = 0; dirty.value = false; saveError.value = ''; saveConflict.value = false
   loaded.value = true; lastSavedAt.value = new Date()
+  if (migrated) { dirty.value = true; scheduleSave() }
   setTimeout(() => fitView({ padding: 0.2 }), 80)
 }
 async function loadResources() {
@@ -560,16 +624,16 @@ async function openRunHistory() {
   showRunHistory.value = true
 }
 function applyRunOverlay(runRecord: any) {
-  const overlay = buildRunOverlay(nodes.value as any[], edges.value as any[], runRecord)
+  const overlay = buildRunOverlay(nodes.value as any[], currentCanvasEdges() as any[], runRecord)
   nodes.value = overlay.nodes as Node[]
-  edges.value = overlay.edges as Edge[]
+  commitEdges(overlay.edges as Edge[])
   nodeResults.value = overlay.nodeResults
   runtimeRunId.value = overlay.runId
 }
 function clearRunOverlay() {
-  const cleared = clearGraphRunOverlay(nodes.value as any[], edges.value as any[])
+  const cleared = clearGraphRunOverlay(nodes.value as any[], currentCanvasEdges() as any[])
   nodes.value = cleared.nodes as Node[]
-  edges.value = cleared.edges as Edge[]
+  commitEdges(cleared.edges as Edge[])
   nodeResults.value = {}
   runtimeRunId.value = ''
 }
@@ -647,18 +711,18 @@ function removeClassifierCategory(index: number) {
   const category = selected.value?.data?.config?.categories?.[index]
   if (!selected.value || !category) return
   const handle = `category:${category.id}`
-  edges.value = (edges.value as any[]).filter(edge => !(edge.source === selected.value!.id && edge.sourceHandle === handle)) as Edge[]
+  commitEdges(currentCanvasEdges().filter(edge => !(edge.source === selected.value!.id && edge.sourceHandle === handle)))
   selected.value.data.config.categories.splice(index, 1)
 }
 function removeHumanAction(actionId: string) {
   if (!selected.value) return
   const handle = `action:${actionId}`
-  edges.value = (edges.value as any[]).filter(edge => !(edge.source === selected.value!.id && edge.sourceHandle === handle)) as Edge[]
+  commitEdges(currentCanvasEdges().filter(edge => !(edge.source === selected.value!.id && edge.sourceHandle === handle)))
   selected.value.data.config.actions = (selected.value.data.config.actions || []).filter((action: any) => action.id !== actionId)
 }
 function updateClassifierKeywords(category: any, value: string) { category.keywords = value.split(/[,，]/).map(item => item.trim()).filter(Boolean) }
 function selectedCanvasNodes() {
-  const canvasNodes = nodes.value as any[]
+  const canvasNodes = getNodes.value as any[]
   const selectedIds = new Set(canvasNodes.filter(node => node.selected).map(node => String(node.id)))
   if (selected.value) selectedIds.add(selected.value.id)
   let expanded = true
@@ -668,24 +732,60 @@ function selectedCanvasNodes() {
   }
   return canvasNodes.filter(node => selectedIds.has(node.id) && !['start', 'end'].includes(String(node.data?.nodeType || node.type)))
 }
-function selectedCanvasEdges() { return (edges.value as any[]).filter(edge => edge.selected) }
+function selectedCanvasEdges() { return (currentCanvasEdges() as any[]).filter(edge => edge.selected) }
+function clearSelectedCanvasEdges() {
+  if (!(currentCanvasEdges() as any[]).some(edge => edge.selected)) return
+  commitEdges(clearWorkflowEdgeSelection(currentCanvasEdges()) as Edge[])
+}
 function copySelection() {
   const selectedNodes = selectedCanvasNodes()
   if (!selectedNodes.length) return
   const ids = new Set(selectedNodes.map(node => node.id))
-  const selectedEdges = (edges.value as any[]).filter(edge => ids.has(edge.source) && ids.has(edge.target))
+  const selectedEdges = (currentCanvasEdges() as any[]).filter(edge => ids.has(edge.source) && ids.has(edge.target))
   copiedGraph.value = JSON.parse(JSON.stringify({ nodes: selectedNodes, edges: selectedEdges })) as GraphState
 }
 function pasteSelection() {
   if (!copiedGraph.value?.nodes.length) return
   const idMap = new Map(copiedGraph.value.nodes.map(node => [node.id, `${String(node.type || 'node')}-${crypto.randomUUID().slice(0, 8)}`]))
-  const pastedNodes = [
-    ...(nodes.value as any[]).map(node => ({ ...node, selected: false })),
-    ...copiedGraph.value.nodes.map(node => ({ ...node, id: idMap.get(node.id)!, parentNode: node.parentNode ? (idMap.get(node.parentNode) || node.parentNode) : undefined, selected: true, position: node.parentNode ? { x: node.position.x + 24, y: node.position.y + 24 } : { x: node.position.x + 42, y: node.position.y + 42 } })),
+  let existingNodes = (nodes.value as any[]).map(node => ({ ...node, selected: false }))
+  const pastedNodes: any[] = []
+  const referenceRenames: Array<Pick<NodeRename, 'from' | 'to'>> = []
+  for (const copied of copiedGraph.value.nodes as any[]) {
+    const type = String(copied.data?.nodeType || copied.type || 'default')
+    const baseName = t(`workflow.nodes.${type}`)
+    const preferred = nodeReferenceName(copied) || baseName
+    const reservedNodes = [...existingNodes, ...pastedNodes]
+    let name = nextUniqueNodeName(reservedNodes, preferred)
+    if (preferred === baseName) {
+      const allocation = allocateDefaultNodeName(reservedNodes, type, baseName)
+      if (allocation.renames.length) {
+        existingNodes = renameNodesAndReferences(existingNodes, allocation.renames)
+        const renamedPasted = renameNodesAndReferences(pastedNodes, allocation.renames)
+        pastedNodes.splice(0, pastedNodes.length, ...renamedPasted)
+      }
+      name = allocation.name
+    }
+    referenceRenames.push({ from: preferred, to: name })
+    pastedNodes.push({
+      ...copied,
+      id: idMap.get(copied.id)!,
+      parentNode: copied.parentNode ? (idMap.get(copied.parentNode) || copied.parentNode) : undefined,
+      selected: true,
+      position: copied.parentNode ? { x: copied.position.x + 24, y: copied.position.y + 24 } : { x: copied.position.x + 42, y: copied.position.y + 42 },
+      data: { ...copied.data, label: name },
+    })
+  }
+  const rewrittenPastedNodes = pastedNodes.map(node => ({
+    ...node,
+    data: { ...node.data, config: rewriteNodeReferences(node.data?.config || {}, referenceRenames) },
+  }))
+  const nextNodes = [
+    ...existingNodes,
+    ...rewrittenPastedNodes,
   ]
-  nodes.value = pastedNodes as Node[]
-  edges.value = [...(edges.value as any[]), ...copiedGraph.value.edges.map(edge => ({ ...edge, id: crypto.randomUUID(), source: idMap.get(edge.source)!, target: idMap.get(edge.target)! }))] as Edge[]
-  selected.value = pastedNodes.find(node => node.id === idMap.get(copiedGraph.value!.nodes[0].id)) || null
+  nodes.value = nextNodes as Node[]
+  commitEdges([...currentCanvasEdges(), ...copiedGraph.value.edges.map(edge => ({ ...edge, id: crypto.randomUUID(), source: idMap.get(edge.source)!, target: idMap.get(edge.target)! }))] as Edge[])
+  selected.value = nextNodes.find(node => node.id === idMap.get(copiedGraph.value!.nodes[0].id)) || null
 }
 function duplicateSelection() { copySelection(); pasteSelection() }
 function removeSelection() {
@@ -693,39 +793,36 @@ function removeSelection() {
   const edgeIds = new Set(selectedCanvasEdges().map(edge => edge.id))
   if (!ids.size && !edgeIds.size) return
   nodes.value = (nodes.value as any[]).filter(node => !ids.has(node.id)) as Node[]
-  edges.value = (edges.value as any[]).filter(edge => !edgeIds.has(edge.id) && !ids.has(edge.source) && !ids.has(edge.target)) as Edge[]
+  commitEdges(currentCanvasEdges().filter(edge => !edgeIds.has(edge.id) && !ids.has(edge.source) && !ids.has(edge.target)))
   selected.value = null
 }
 function clearSelection() {
-  nodes.value = (nodes.value as any[]).map(node => ({ ...node, selected: false })) as Node[]
-  edges.value = (edges.value as any[]).map(edge => ({ ...edge, selected: false })) as Edge[]
+  const selectedNodes = (getNodes.value as any[]).filter(node => node.selected)
+  if (selectedNodes.length) removeSelectedNodes(selectedNodes)
+  clearSelectedCanvasEdges()
   selected.value = null
+  nodeNameError.value = ''
   nodeContextMenu.value = null
 }
 function clearNodeSelection() {
-  nodes.value = (nodes.value as any[]).map(node => node.selected ? { ...node, selected: false } : node) as Node[]
+  const selectedNodes = (getNodes.value as any[]).filter(node => node.selected)
+  if (selectedNodes.length) removeSelectedNodes(selectedNodes)
   selected.value = null
+  nodeNameError.value = ''
   nodeContextMenu.value = null
 }
 function selectAllEditableNodes() {
-  let first: any = null
-  nodes.value = (nodes.value as any[]).map(node => {
-    const editable = !['start', 'end'].includes(String(node.data?.nodeType || node.type))
-    if (editable && !first) first = node
-    return { ...node, selected: editable }
-  }) as Node[]
-  selected.value = first
+  const editableNodes = (getNodes.value as any[]).filter(node => !['start', 'end'].includes(String(node.data?.nodeType || node.type)))
+  if (!editableNodes.length) return
+  addSelectedNodes(editableNodes)
+  selected.value = editableNodes[0]
 }
 function selectOnlyCanvasNode(nodeId: string) {
-  let target: any = null
-  nodes.value = (nodes.value as any[]).map(node => {
-    const isTarget = node.id === nodeId
-    const next = node.selected === isTarget ? node : { ...node, selected: isTarget }
-    if (isTarget) target = next
-    return next
-  }) as Node[]
-  edges.value = (edges.value as any[]).map(edge => edge.selected ? { ...edge, selected: false } : edge) as Edge[]
+  const target = (getNodes.value as any[]).find(node => node.id === nodeId) || (nodes.value as any[]).find(node => node.id === nodeId)
+  if (!target) return null
+  addSelectedNodes([target])
   selected.value = target
+  nodeNameError.value = ''
   return target
 }
 function runNodeAction(nodeId: string, action: NodeAction) {
@@ -757,20 +854,18 @@ function openNodeContextMenu(payload: { event: MouseEvent | TouchEvent; node: No
 function autoLayout() {
   const topLevel = (nodes.value as any[]).filter(node => !node.parentNode)
   const topIds = new Set(topLevel.map(node => node.id))
-  const laidOut = layoutWorkflow(topLevel, (edges.value as any[]).filter(edge => topIds.has(edge.source) && topIds.has(edge.target)))
+  const laidOut = layoutWorkflow(topLevel, (currentCanvasEdges() as any[]).filter(edge => topIds.has(edge.source) && topIds.has(edge.target)))
   const positions = new Map(laidOut.map(node => [node.id, node.position]))
   nodes.value = (nodes.value as any[]).map(node => node.parentNode ? node : { ...node, position: positions.get(node.id) || node.position }) as Node[]
   setTimeout(() => fitView({ padding: 0.2 }), 50)
 }
-function validConnection(connection: Connection) { return isConnectionAllowed(nodes.value as any[], edges.value as any[], connection) }
+function validConnection(connection: Connection) { return isConnectionAllowed(nodes.value as any[], currentCanvasEdges() as any[], connection) }
 function commitEdges(nextEdges: Edge[]) {
-  edges.value = nextEdges
-  setEdges(nextEdges)
+  const committed = mergeWorkflowEdges(nextEdges).map(edge => ({ ...edge, type: edge.type || 'workflow' })) as Edge[]
+  edges.value = committed
 }
 async function appendEdge(edge: Edge) {
-  addEdges(edge)
-  await nextTick()
-  pendingGraphEdges.set(edge.id, edge)
+  commitEdges([...currentCanvasEdges(), edge])
   editRevision.value += 1
   dirty.value = true
   saveError.value = ''
@@ -782,7 +877,8 @@ function replacementText(current: unknown, oldType: string, newType: string, sec
     ? (locale as any).workflow?.nodes?.[oldType]
     : (locale as any).designer?.nodeDescriptions?.[oldType]).filter(Boolean)
   const value = String(current || '').trim()
-  if (value && !knownDefaults.includes(value)) return value
+  const usesDefault = knownDefaults.some(defaultValue => value === defaultValue || (value.startsWith(String(defaultValue)) && /^\d+$/u.test(value.slice(String(defaultValue).length))))
+  if (value && !usesDefault) return value
   return t(section === 'nodes' ? `workflow.nodes.${newType}` : `designer.nodeDescriptions.${newType}`)
 }
 async function add(type: string, configOverride: Record<string, any> = {}) {
@@ -791,6 +887,15 @@ async function add(type: string, configOverride: Record<string, any> = {}) {
     if (!oldNode) return null
     const isContainer = ['iteration', 'loop'].includes(type)
     const oldType = String(oldNode.data?.nodeType || oldNode.type || '')
+    const oldName = nodeReferenceName(oldNode)
+    const baseName = t(`workflow.nodes.${type}`)
+    const requestedName = replacementText(oldNode.data?.label, oldType, type, 'nodes')
+    let replacementName = nextUniqueNodeName(nodes.value as any[], requestedName, [oldNode.id])
+    if (requestedName === baseName) {
+      const allocation = allocateDefaultNodeName((nodes.value as any[]).filter(node => node.id !== oldNode.id), type, baseName)
+      if (allocation.renames.length) nodes.value = renameNodesAndReferences(nodes.value as any[], allocation.renames) as Node[]
+      replacementName = allocation.name
+    }
     const replacement: any = {
       id: oldNode.id,
       type,
@@ -799,15 +904,15 @@ async function add(type: string, configOverride: Record<string, any> = {}) {
       ...(isContainer ? { style: { width: '520px', height: '260px' } } : {}),
       selected: true,
       data: {
-        label: replacementText(oldNode.data?.label, oldType, type, 'nodes'),
+        label: replacementName,
         nodeType: type,
         description: replacementText(oldNode.data?.description, oldType, type, 'nodeDescriptions'),
-        config: { ...defaultNodeConfig(type), ...configOverride },
+        config: withNamedStartReferences({ ...defaultNodeConfig(type), ...configOverride }),
       },
     }
-    const replaced = replaceWorkflowNode(nodes.value as any[], edges.value as any[], oldNode.id, replacement)
-    nodes.value = replaced.nodes as Node[]
-    edges.value = replaced.edges as Edge[]
+    const replaced = replaceWorkflowNode(nodes.value as any[], currentCanvasEdges() as any[], oldNode.id, replacement)
+    nodes.value = (oldName && oldName !== replacementName ? replaceReferences(replaced.nodes as any[], [{ from: oldName, to: replacementName }]) : replaced.nodes) as Node[]
+    commitEdges(replaced.edges as Edge[])
     selectOnlyCanvasNode(replacement.id)
     paletteOpen.value = false
     paletteReplaceNodeId.value = null
@@ -815,11 +920,14 @@ async function add(type: string, configOverride: Record<string, any> = {}) {
     setTimeout(focusSelected, 120)
     return replacement
   }
+  const baseName = t(`workflow.nodes.${type}`)
+  const allocation = allocateDefaultNodeName(nodes.value as any[], type, baseName)
+  if (allocation.renames.length) nodes.value = renameNodesAndReferences(nodes.value as any[], allocation.renames) as Node[]
   const id = `${type}-${crypto.randomUUID().slice(0, 8)}`
   const sourceId = pendingSourceConnection?.sourceId || paletteSourceId.value
   const sourceHandle = pendingSourceConnection?.sourceHandle || paletteSourceHandle.value || undefined
   const source = sourceId ? (nodes.value as any[]).find(node => node.id === sourceId) : null
-  const insertionEdge = paletteEdgeId.value ? (edges.value as any[]).find(edge => edge.id === paletteEdgeId.value) : null
+  const insertionEdge = paletteEdgeId.value ? (currentCanvasEdges() as any[]).find(edge => edge.id === paletteEdgeId.value) : null
   const edgeSource = insertionEdge ? (nodes.value as any[]).find(node => node.id === insertionEdge.source) : null
   const edgeTarget = insertionEdge ? (nodes.value as any[]).find(node => node.id === insertionEdge.target) : null
   const parentId = paletteParentId.value || source?.parentNode || (edgeSource?.parentNode && edgeSource.parentNode === edgeTarget?.parentNode ? edgeSource.parentNode : null)
@@ -839,10 +947,10 @@ async function add(type: string, configOverride: Record<string, any> = {}) {
     position,
     ...(parentId ? { parentNode: parentId, extent: 'parent' as const, expandParent: true } : {}),
     ...(isContainer ? { style: { width: '520px', height: '260px' } } : {}),
-    data: { label: t(`workflow.nodes.${type}`), nodeType: type, description: t(`designer.nodeDescriptions.${type}`), config: { ...defaultNodeConfig(type), ...configOverride } },
+    data: { label: allocation.name, nodeType: type, description: t(`designer.nodeDescriptions.${type}`), config: withNamedStartReferences({ ...defaultNodeConfig(type), ...configOverride }) },
   }
   if (insertionEdge) {
-    const next = insertNodeOnEdge(nodes.value as any[], edges.value as any[], insertionEdge.id, node)
+    const next = insertNodeOnEdge(nodes.value as any[], currentCanvasEdges() as any[], insertionEdge.id, node)
     nodes.value = next.nodes as Node[]
     addNodes(node as Node)
     await nextTick()
@@ -868,10 +976,12 @@ async function add(type: string, configOverride: Record<string, any> = {}) {
 async function addScriptSnippet(script: any) {
   const added = await add('script', { script_id: script.id, script_name: script.name, version: 'latest' })
   if (!added) return
-  added.data.label = script.name
+  updateSelectedNodeLabel(nextUniqueNodeName(nodes.value as any[], script.name, [added.id]))
 }
 function addNoteAt(position?: { x: number; y: number }) {
-  const note = { id: `note-${crypto.randomUUID().slice(0, 8)}`, type: 'note', position: position || { x: 260, y: 140 }, data: { label: t('designer.noteTitleDefault'), description: '', nodeType: 'note', color: annotationColor.value } }
+  const name = allocateDefaultNodeName(nodes.value as any[], 'note', t('designer.noteTitleDefault'))
+  if (name.renames.length) nodes.value = renameNodesAndReferences(nodes.value as any[], name.renames) as Node[]
+  const note = { id: `note-${crypto.randomUUID().slice(0, 8)}`, type: 'note', position: position || { x: 260, y: 140 }, data: { label: name.name, description: '', nodeType: 'note', color: annotationColor.value } }
   nodes.value = [...(nodes.value as any[]), note] as Node[]; selectOnlyCanvasNode(note.id); paletteOpen.value = false; paletteEdgeId.value = null
   annotationMode.value = false
 }
@@ -887,6 +997,20 @@ function handlePaneClick(event: MouseEvent) {
   paletteOpen.value = false
   clearSelection()
 }
+function handleCanvasBackgroundClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null
+  if (!target?.classList.contains('vue-flow__pane') || annotationMode.value || commentMode.value) return
+  paletteOpen.value = false
+  clearSelection()
+}
+function handleCanvasMouseDown(event: MouseEvent) {
+  if (event.button !== 1) return
+  middlePanning.value = true
+  paletteOpen.value = false
+  nodeContextMenu.value = null
+}
+function stopMiddlePanning() { middlePanning.value = false }
+function handleCanvasAuxClick(event: MouseEvent) { if (event.button === 1) event.preventDefault() }
 function currentCommentAuthor() { return { author_id: auth.user?.id || '', author_name: auth.user?.display_name || auth.user?.email || t('designer.user') } }
 function toggleCommentMode() {
   commentMode.value = !commentMode.value
@@ -985,20 +1109,13 @@ function handleContainerDelete(event: Event) {
   if (!parentId) return
   const ids = new Set([parentId, ...(nodes.value as any[]).filter(node => node.parentNode === parentId).map(node => node.id)])
   nodes.value = (nodes.value as any[]).filter(node => !ids.has(node.id)) as Node[]
-  edges.value = (edges.value as any[]).filter(edge => !ids.has(edge.source) && !ids.has(edge.target)) as Edge[]
+  commitEdges(currentCanvasEdges().filter(edge => !ids.has(edge.source) && !ids.has(edge.target)))
   selected.value = null
-}
-function handleEdgeAdd(event: Event) {
-  const detail = (event as CustomEvent<{ edgeId?: string; clientX?: number; clientY?: number }>).detail
-  const edgeId = detail?.edgeId
-  if (!edgeId) return
-  pendingSourceConnection = null; paletteSourceId.value = null; paletteSourceHandle.value = null; paletteParentId.value = null; paletteEdgeId.value = edgeId; paletteReplaceNodeId.value = null; paletteQuery.value = ''; paletteTab.value = 'nodes'; positionPaletteAtClient(detail.clientX, detail.clientY); paletteOpen.value = true
 }
 function handleEdgeDelete(event: Event) {
   const edgeId = (event as CustomEvent<{ edgeId?: string }>).detail?.edgeId
   if (!edgeId) return
-  pendingGraphEdges.delete(edgeId)
-  commitEdges((edges.value as any[]).filter(edge => edge.id !== edgeId) as Edge[])
+  commitEdges(removeWorkflowEdgeById(currentCanvasEdges(), edgeId))
 }
 function focusSelected() {
   if (!selected.value) return
@@ -1127,7 +1244,7 @@ function runtimeVariableValue(path: string) {
     const values: Record<string, any> = { user_id: auth.user?.id, app_id: workflowId.value, workflow_id: workflowId.value, workflow_run_id: runtimeRunId.value || undefined, timestamp: selectedRun.value?.created_at ? Math.floor(new Date(selectedRun.value.created_at).getTime() / 1000) : undefined }
     return values[key]
   }
-  return readRuntimeVariable(path, nodeResults.value)
+  return readRuntimeVariable(path, nodeResults.value, nodes.value as any[])
 }
 function variableReference(path: string) { return `{{${path}}}` }
 function formatRuntimeValue(value: any) {
@@ -1173,8 +1290,8 @@ watch(() => (nodes.value as any[]).map(node => node.id).join(','), () => {
 watch(() => JSON.stringify(selected.value?.data?.config || {}), () => { if (!configEditing.value) syncConfigEditor(); if (selectedType.value === 'classifier') syncClassifierEdgeLabels() })
 watch(() => validationIssues.value.map(issue => `${issue.nodeId || ''}|${issue.code}|${issueText(issue)}`).join('\n'), syncValidationOverlay, { immediate: true })
 onBeforeRouteLeave(() => (!dirty.value && !saving.value) || window.confirm(t('designer.unsavedLeaveConfirm')))
-onMounted(async () => { window.addEventListener('keydown', handleKeydown); window.addEventListener('beforeunload', handleBeforeUnload); window.addEventListener('workflow-quick-add', handleQuickAdd); window.addEventListener('workflow-node-action', handleNodeAction); window.addEventListener('workflow-node-validation', handleNodeValidation); window.addEventListener('workflow-container-add', handleContainerAdd); window.addEventListener('workflow-container-delete', handleContainerDelete); window.addEventListener('workflow-edge-add', handleEdgeAdd); window.addEventListener('workflow-edge-delete', handleEdgeDelete); await workspaces.load(); await Promise.all([load(), loadResources(), loadApprovals(), loadEnvironmentVariables()]) })
-onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.removeEventListener('keydown', handleKeydown); window.removeEventListener('beforeunload', handleBeforeUnload); window.removeEventListener('workflow-quick-add', handleQuickAdd); window.removeEventListener('workflow-node-action', handleNodeAction); window.removeEventListener('workflow-node-validation', handleNodeValidation); window.removeEventListener('workflow-container-add', handleContainerAdd); window.removeEventListener('workflow-container-delete', handleContainerDelete); window.removeEventListener('workflow-edge-add', handleEdgeAdd); window.removeEventListener('workflow-edge-delete', handleEdgeDelete) })
+onMounted(async () => { window.addEventListener('keydown', handleKeydown); window.addEventListener('mouseup', stopMiddlePanning); window.addEventListener('blur', stopMiddlePanning); window.addEventListener('beforeunload', handleBeforeUnload); window.addEventListener('workflow-quick-add', handleQuickAdd); window.addEventListener('workflow-node-action', handleNodeAction); window.addEventListener('workflow-node-validation', handleNodeValidation); window.addEventListener('workflow-container-add', handleContainerAdd); window.addEventListener('workflow-container-delete', handleContainerDelete); window.addEventListener('workflow-edge-delete', handleEdgeDelete); await workspaces.load(); await Promise.all([load(), loadResources(), loadApprovals(), loadEnvironmentVariables()]) })
+onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.removeEventListener('keydown', handleKeydown); window.removeEventListener('mouseup', stopMiddlePanning); window.removeEventListener('blur', stopMiddlePanning); window.removeEventListener('beforeunload', handleBeforeUnload); window.removeEventListener('workflow-quick-add', handleQuickAdd); window.removeEventListener('workflow-node-action', handleNodeAction); window.removeEventListener('workflow-node-validation', handleNodeValidation); window.removeEventListener('workflow-container-add', handleContainerAdd); window.removeEventListener('workflow-container-delete', handleContainerDelete); window.removeEventListener('workflow-edge-delete', handleEdgeDelete) })
 </script>
 
 <template>
@@ -1239,8 +1356,8 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.
       </header>
 
       <div v-if="activeSection === 'orchestration'" class="flex min-h-0 flex-1">
-        <section ref="canvasHost" class="relative min-w-0 flex-1">
-          <VueFlow v-model:nodes="nodes" v-model:edges="edges" :node-types="nodeTypes" :edge-types="edgeTypes" :default-edge-options="{ type: 'workflow' }" :is-valid-connection="validConnection" :pan-on-drag="interactionMode === 'hand' || replayMode" :selection-on-drag="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :nodes-draggable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :nodes-connectable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :elements-selectable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" fit-view-on-init class="workflow-canvas" :class="{ 'replay-mode': replayMode, 'annotation-mode': annotationMode || commentMode }" @node-click="event => { nodeContextMenu = null; if (!replayMode && !annotationMode && !commentMode) selectNode(event) }" @node-context-menu="openNodeContextMenu" @edge-click="clearNodeSelection" @pane-click="handlePaneClick">
+        <section ref="canvasHost" class="relative min-w-0 flex-1" @click.capture="handleCanvasBackgroundClick" @mousedown="handleCanvasMouseDown" @auxclick="handleCanvasAuxClick">
+          <VueFlow v-if="loaded" v-model:nodes="nodes" v-model:edges="edges" :node-types="nodeTypes" :edge-types="edgeTypes" :default-edge-options="{ type: 'workflow' }" :is-valid-connection="validConnection" :pan-on-drag="interactionMode === 'hand' || replayMode ? [0, 1] : [1]" :selection-on-drag="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :nodes-draggable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :nodes-connectable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :elements-selectable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" fit-view-on-init class="workflow-canvas" :class="{ 'replay-mode': replayMode, 'annotation-mode': annotationMode || commentMode, 'middle-panning': middlePanning }" @node-click="event => { nodeContextMenu = null; if (!replayMode && !annotationMode && !commentMode) selectNode(event) }" @node-context-menu="openNodeContextMenu" @edge-click="clearNodeSelection" @pane-click="handlePaneClick">
             <Background :gap="18" :size="1" pattern-color="var(--border)" />
             <MiniMap pannable zoomable position="bottom-right" />
           </VueFlow>
@@ -1291,7 +1408,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.
 
         <WorkflowCommentsPanel v-if="showComments" :comments="comments" :selected-id="selectedCommentId" :placement-active="commentMode" @close="closeComments" @select="selectComment" @place="toggleCommentMode" @submit="submitComment" @toggle-resolved="toggleCommentResolved" @delete="deleteCommentThread" />
 
-        <WorkflowNodeInspector v-else-if="selected" v-model:tab="inspectorTab" :node="selected" :node-type="selectedType" :running="running" :result="selectedResult" @update:label="selected.data.label = $event" @update:description="selected.data.description = $event" @run="openRunDialog(selected.id)" @help="showHelp = true" @close="clearNodeSelection">
+        <WorkflowNodeInspector v-else-if="selected" v-model:tab="inspectorTab" :node="selected" :node-type="selectedType" :running="running" :result="selectedResult" :name-error="nodeNameError" @update:label="updateSelectedNodeLabel" @update:description="selected.data.description = $event" @run="openRunDialog(selected.id)" @help="showHelp = true" @close="clearNodeSelection">
           <template #settings>
               <label v-if="selectedType === 'note'" class="field-label">{{ t('designer.noteContent') }}<MarkdownComposer v-model="selected.data.description" class="mt-1.5" :placeholder="t('designer.noteEmpty')" :rows="6" /></label>
               <template v-if="selectedType === 'note'">
@@ -1356,13 +1473,13 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.
                   <label class="field-label">{{ t('designer.workspaceScript') }}<Select v-model="selected.data.config.script_id" class="mt-1.5 !h-9 !text-xs" @change="selectScript"><option value="">{{ t('designer.selectScript') }}</option><option v-for="script in scripts" :key="script.id" :value="script.id">{{ script.name }} · v{{ script.latest_version }}</option></Select></label>
                   <p v-if="!scripts.length" class="resource-empty">{{ t('designer.noScripts') }}</p>
                   <label class="field-label">{{ t('designer.scriptVersion') }}<Select v-model="selected.data.config.version" class="mt-1.5 !h-9 !text-xs"><option value="latest">{{ t('designer.followLatest') }}</option><option v-if="selectedScript" :value="selectedScript.latest_version">v{{ selectedScript.latest_version }}</option></Select></label>
-                  <JsonEditorField v-model="configBuffers.scriptInputs" :label="t('designer.scriptInputs')" :error="configFieldErrors.scriptInputs" @input="updateStructuredField('inputs', 'scriptInputs')" />
+                  <JsonEditorField v-model="configBuffers.scriptInputs" :label="t('designer.scriptInputs')" :error="configFieldErrors.scriptInputs" :groups="variableGroups" @input="updateStructuredField('inputs', 'scriptInputs')" />
                 </section>
                 <KnowledgeConfigPanel v-else-if="selectedType === 'knowledge'" :config="selected.data.config" :datasets="datasets" :variable-groups="variableGroups" />
                 <HttpConfigPanel v-else-if="selectedType === 'http'" :config="selected.data.config" :variable-groups="variableGroups" :buffers="configBuffers" :errors="configFieldErrors" @structured="updateStructuredField" />
                 <TemplateConfigPanel v-else-if="selectedType === 'template'" :config="selected.data.config" :variable-groups="variableGroups" />
                 <VariableAssignConfigPanel v-else-if="selectedType === 'variable'" :key="selected.id" :config="selected.data.config" :variable-groups="variableGroups" />
-                <JsonEditorField v-else-if="selectedType === 'json'" v-model="configBuffers.jsonValue" class="mt-5" :label="t('designer.jsonValue')" :error="configFieldErrors.jsonValue" height-class="h-52" @input="updateStructuredField('value', 'jsonValue')" />
+                <JsonEditorField v-else-if="selectedType === 'json'" v-model="configBuffers.jsonValue" class="mt-5" :label="t('designer.jsonValue')" :error="configFieldErrors.jsonValue" :groups="variableGroups" height-class="h-52" @input="updateStructuredField('value', 'jsonValue')" />
                 <AggregateConfigPanel v-else-if="selectedType === 'aggregate'" :config="selected.data.config" :variable-groups="variableGroups" />
                 <ParameterExtractorConfigPanel v-else-if="selectedType === 'extract'" :key="selected.id" :config="selected.data.config" :providers="modelProviders" :variable-groups="variableGroups" />
                 <ListOperatorConfigPanel v-else-if="selectedType === 'list'" :key="selected.id" :config="selected.data.config" :variable-groups="variableGroups" />
@@ -1375,7 +1492,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.
                 <DocumentConfigPanel v-else-if="selectedType === 'document'" :config="selected.data.config" :variable-groups="variableGroups" />
                 <NodeOutputPanel :node="selected" :copied-path="copiedVariablePath" @copy="copyVariableReference" />
                 <ExecutionPolicyPanel v-if="executionPolicyNodeTypes.has(selectedType)" :config="selected.data.config" @connect-error="openPaletteForSource(selected.id, 'error')" />
-                <details class="mt-5 rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)] p-3" @toggle="syncConfigEditor"><summary class="cursor-pointer text-xs font-semibold">{{ t('designer.advancedConfig') }}</summary><JsonEditorField v-model="configText" class="mt-3" :label="t('workflow.configuration')" :error="configError" height-class="h-48" @focus="configEditing = true" @blur="configEditing = false; syncConfigEditor()" @input="updateSelectedConfig" /></details>
+                <details class="mt-5 rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)] p-3" open @toggle="syncConfigEditor"><summary class="cursor-pointer text-xs font-semibold">{{ t('designer.advancedConfig') }}</summary><JsonEditorField v-model="configText" class="mt-3" :label="t('workflow.configuration')" :error="configError" :groups="variableGroups" height-class="h-48" @focus="configEditing = true" @blur="configEditing = false; syncConfigEditor()" @input="updateSelectedConfig" /></details>
               </template>
             <NextStepPanel v-if="!['end','note','condition','classifier','human'].includes(selectedType)" :nodes="nextNodes" @add="openPaletteForSource(selected.id)" @parallel="openPaletteForSource(selected.id)" />
           </template>
@@ -1407,7 +1524,8 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.
 .workflow-canvas .vue-flow__minimap { right: 14px !important; bottom: 58px !important; width: 170px !important; height: 105px !important; }
 .workflow-canvas.replay-mode .vue-flow__node { pointer-events: none; }
 .workflow-canvas.annotation-mode .vue-flow__pane { cursor: crosshair; }
-.designer-sidebar { letter-spacing: 0; }.icon-button { display: inline-flex; width: 30px; height: 30px; flex: none; align-items: center; justify-content: center; border-radius: 7px; color: var(--muted); }.icon-button:hover { background: var(--panel-subtle); color: var(--text); }.side-nav { display: flex; width: 100%; height: 36px; align-items: center; gap: 10px; border-radius: 7px; padding: 0 10px; color: var(--muted); font-size: 13px; }.side-nav:hover { background: var(--panel-subtle); color: var(--text); }.side-nav.active { background: var(--primary-soft); color: var(--primary); font-weight: 600; }.workflow-canvas { background: var(--app-bg); }.workflow-canvas .vue-flow__node { border: 0; background: transparent; padding: 0; box-shadow: none; }.workflow-canvas .vue-flow__handle { width: 9px; height: 9px; border: 2px solid var(--panel); background: var(--primary); }.workflow-canvas .vue-flow__handle.quick-add-handle { width: 16px; height: 16px; border: 0; background: transparent; }.workflow-canvas .vue-flow__edge-path { stroke: #98a2b3; stroke-width: 1.5; }.canvas-mode-button { display: flex; width: 36px; height: 36px; align-items: center; justify-content: center; color: var(--muted); }.canvas-mode-button:hover { background: var(--panel-subtle); color: var(--text); }.canvas-mode-button.active { background: var(--primary-soft); color: var(--primary); }.canvas-action-row { display: flex; width: 100%; height: 32px; align-items: center; gap: 8px; border-radius: 6px; padding: 0 9px; font-size: 12px; }.canvas-action-row:hover:not(:disabled) { background: var(--panel-subtle); }.canvas-action-row:disabled { cursor: not-allowed; opacity: .4; }.inspector-tab { height: 40px; border-bottom: 2px solid transparent; padding: 0 12px; color: var(--muted); font-size: 12px; }.inspector-tab.active { border-color: var(--primary); color: var(--primary); font-weight: 600; }.field-label { display: block; color: var(--text); font-size: 12px; font-weight: 600; }.vue-flow__minimap { overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.workflow-canvas.middle-panning .vue-flow__pane, .workflow-canvas.middle-panning .vue-flow__node { cursor: grabbing !important; }
+.designer-sidebar { letter-spacing: 0; }.icon-button { display: inline-flex; width: 30px; height: 30px; flex: none; align-items: center; justify-content: center; border-radius: 7px; color: var(--muted); }.icon-button:hover { background: var(--panel-subtle); color: var(--text); }.side-nav { display: flex; width: 100%; height: 36px; align-items: center; gap: 10px; border-radius: 7px; padding: 0 10px; color: var(--muted); font-size: 13px; }.side-nav:hover { background: var(--panel-subtle); color: var(--text); }.side-nav.active { background: var(--primary-soft); color: var(--primary); font-weight: 600; }.workflow-canvas { background: var(--app-bg); }.workflow-canvas .vue-flow__node { border: 0; background: transparent; padding: 0; box-shadow: none; }.workflow-canvas .vue-flow__handle { width: 9px; height: 9px; border: 2px solid var(--panel); background: var(--primary); }.workflow-canvas .vue-flow__handle.quick-add-handle { width: 20px; height: 20px; border: 0; background: transparent; }.workflow-canvas .vue-flow__edge-path { stroke: #98a2b3; stroke-width: 1.5; }.canvas-mode-button { display: flex; width: 36px; height: 36px; align-items: center; justify-content: center; color: var(--muted); }.canvas-mode-button:hover { background: var(--panel-subtle); color: var(--text); }.canvas-mode-button.active { background: var(--primary-soft); color: var(--primary); }.canvas-action-row { display: flex; width: 100%; height: 32px; align-items: center; gap: 8px; border-radius: 6px; padding: 0 9px; font-size: 12px; }.canvas-action-row:hover:not(:disabled) { background: var(--panel-subtle); }.canvas-action-row:disabled { cursor: not-allowed; opacity: .4; }.inspector-tab { height: 40px; border-bottom: 2px solid transparent; padding: 0 12px; color: var(--muted); font-size: 12px; }.inspector-tab.active { border-color: var(--primary); color: var(--primary); font-weight: 600; }.field-label { display: block; color: var(--text); font-size: 12px; font-weight: 600; }.vue-flow__minimap { overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
 .resource-empty { border: 1px dashed var(--border); border-radius: 7px; background: var(--panel-subtle); padding: 10px; color: var(--muted); font-size: 11px; }.field-error { margin-top: 6px; color: #d92d20; font-size: 11px; }
 .canvas-history-button { display: flex; width: 34px; height: 34px; align-items: center; justify-content: center; color: var(--muted); }.canvas-history-button:hover:not(:disabled) { background: var(--panel-subtle); color: var(--primary); }.canvas-history-button:disabled { cursor: not-allowed; opacity: .35; }
 .run-detail-heading { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }.run-detail-code { margin-top: 8px; max-height: 260px; overflow: auto; white-space: pre-wrap; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-subtle); padding: 12px; font-size: 11px; line-height: 1.6; }

@@ -24,12 +24,12 @@ describe('workflow variable catalog', () => {
 
     expect(groups.map(group => group.nodeId)).toEqual(['start', 'extract-1', 'variables-1', 'llm-1'])
     expect(groups.flatMap(group => group.variables)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: 'inputs.message', label: '问题', type: 'String' }),
-      expect.objectContaining({ path: 'inputs.files', type: 'Array[File]' }),
-      expect.objectContaining({ path: 'extract-1.customer' }),
-      expect.objectContaining({ path: 'variables-1.region' }),
-      expect.objectContaining({ path: 'llm-1.text' }),
-      expect.objectContaining({ path: 'llm-1.structured_output.title', label: 'title', type: 'string' }),
+      expect.objectContaining({ path: '用户输入.message', label: '问题', type: 'String' }),
+      expect.objectContaining({ path: '用户输入.files', type: 'Array[File]' }),
+      expect.objectContaining({ path: '参数提取.customer' }),
+      expect.objectContaining({ path: '变量赋值.region' }),
+      expect.objectContaining({ path: '生成内容.text' }),
+      expect.objectContaining({ path: '生成内容.structured_output.title', label: 'title', type: 'string' }),
     ]))
     expect(groups.some(group => group.nodeId === 'unrelated')).toBe(false)
     expect(groups.some(group => group.nodeId === 'target')).toBe(false)
@@ -44,17 +44,18 @@ describe('workflow variable catalog', () => {
     expect(catalog.map(group => group.nodeId)).toEqual(expect.arrayContaining(['start', 'extract-1', 'variables-1', 'llm-1', 'unrelated']))
     const httpVariables = catalog.find(group => group.nodeId === 'unrelated')!.variables
     expect(httpVariables).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: 'unrelated.status_code', type: 'Number' }),
-      expect.objectContaining({ path: 'unrelated.elapsed_ms', type: 'Number' }),
-      expect.objectContaining({ path: 'unrelated.ok', type: 'Boolean' }),
+      expect.objectContaining({ path: '其他请求.status_code', type: 'Number' }),
+      expect.objectContaining({ path: '其他请求.elapsed_ms', type: 'Number' }),
+      expect.objectContaining({ path: '其他请求.ok', type: 'Boolean' }),
     ]))
     const results = {
       start: { node_type: 'start', output: { message: 'Hello' } },
       'llm-1': { node_type: 'llm', output: { structured_output: { title: 'Weekly report' } } },
     }
-    expect(readRuntimeVariable('inputs.message', results)).toBe('Hello')
-    expect(readRuntimeVariable('llm-1.structured_output.title', results)).toBe('Weekly report')
-    expect(readRuntimeVariable('llm-1.structured_output.missing', results)).toBeUndefined()
+    expect(readRuntimeVariable('用户输入.message', results, nodes)).toBe('Hello')
+    expect(readRuntimeVariable('生成内容.structured_output.title', results, nodes)).toBe('Weekly report')
+    expect(readRuntimeVariable('生成内容.structured_output.missing', results, nodes)).toBeUndefined()
+    expect(readRuntimeVariable('llm-1.structured_output.title', results, nodes)).toBe('Weekly report')
   })
 
   it('exposes condition results and error-branch outputs for dynamic nodes', () => {
@@ -73,9 +74,9 @@ describe('workflow variable catalog', () => {
       },
     }
     expect(getNodeOutputVariables(structuredLlm)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: 'llm-1.structured_output.title' }),
-      expect.objectContaining({ path: 'llm-1.error_type' }),
-      expect.objectContaining({ path: 'llm-1.error_message' }),
+      expect.objectContaining({ path: '生成内容.structured_output.title' }),
+      expect.objectContaining({ path: '生成内容.error_type' }),
+      expect.objectContaining({ path: '生成内容.error_message' }),
     ]))
 
     const reasoningLlm = {
@@ -83,7 +84,7 @@ describe('workflow variable catalog', () => {
       data: { ...structuredLlm.data, config: { ...structuredLlm.data.config, reasoning: { separate: true } } },
     }
     expect(getNodeOutputVariables(reasoningLlm)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: 'llm-1.reasoning_content', type: 'String' }),
+      expect.objectContaining({ path: '生成内容.reasoning_content', type: 'String' }),
     ]))
   })
 

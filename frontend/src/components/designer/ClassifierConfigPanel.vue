@@ -18,7 +18,7 @@ function keywords(category: any) { return Array.isArray(category.keywords) ? cat
 
 <template>
   <div class="mt-5 space-y-4">
-    <FormField :label="t('designer.classifierInput')" compact><VariableField v-model="config.input" class="font-mono" :groups="variableGroups" placeholder="{{inputs.message}}" /></FormField>
+    <FormField :label="t('designer.classifierInput')" compact><VariableField v-model="config.input" class="font-mono" :groups="variableGroups" :placeholder="t('designer.variableReferencePlaceholder')" /></FormField>
     <NodeConfigSection :title="t('designer.categories')" :hint="t('designer.classifierCategoriesHint')">
       <template #actions><IconButton :label="t('designer.addCategory')" size="sm" @click="emit('add')"><Plus :size="14" /></IconButton></template>
       <div class="space-y-3">

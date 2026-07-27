@@ -56,4 +56,9 @@ describe('WorkflowEdge', () => {
     const wrapper = render({ targetY: 120 })
     expect(wrapper.get('[data-testid="edge"]').attributes('data-path')).toMatch(/^M.*C/)
   })
+
+  it('does not render an add-node control on the connection', () => {
+    const wrapper = render({})
+    expect(wrapper.find('[aria-label="在连线上插入节点"]').exists()).toBe(false)
+  })
 })

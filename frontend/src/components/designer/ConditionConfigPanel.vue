@@ -29,7 +29,7 @@ const operators = ['equals','not_equals','contains','not_contains','starts_with'
         <button v-if="!config.conditions.length" type="button" class="w-full rounded-lg border border-dashed border-[var(--border)] py-5 text-xs text-[var(--muted)] hover:border-[var(--primary)] hover:text-[var(--primary)]" @click="emit('add')"><Plus class="mr-1 inline" :size="13" />{{ t('designer.addCondition') }}</button>
       </div>
     </NodeConfigSection>
-    <details v-if="config.expression" class="mt-3 rounded-lg border border-[var(--border)] p-3"><summary class="cursor-pointer text-[11px] font-semibold">{{ t('designer.legacyCondition') }}</summary><VariableField v-model="config.expression" class="mt-3 font-mono" :groups="variableGroups" multiline :rows="4" :placeholder="t('designer.conditionPlaceholder')" /></details>
+    <details v-if="config.expression" class="mt-3 rounded-lg border border-[var(--border)] p-3" open><summary class="cursor-pointer text-[11px] font-semibold">{{ t('designer.legacyCondition') }}</summary><VariableField v-model="config.expression" class="mt-3 font-mono" :groups="variableGroups" multiline :rows="4" :placeholder="t('designer.conditionPlaceholder')" /></details>
     <div class="mt-4 grid grid-cols-2 gap-2"><BranchButton :label="`IF · ${t('designer.trueBranch')}`" tone="success" @click="emit('connect', 'true')" /><BranchButton :label="`ELSE · ${t('designer.falseBranch')}`" tone="warning" @click="emit('connect', 'false')" /></div>
   </div>
 </template>

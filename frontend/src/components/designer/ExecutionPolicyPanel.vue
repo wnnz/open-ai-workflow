@@ -37,7 +37,7 @@ function updateDefaultOutput() {
 
 <template>
   <div class="mt-5 space-y-4 border-t border-[var(--border)] pt-5">
-    <NodeConfigSection :title="t('designer.retryOnFailure')" :hint="t('designer.retryOnFailureHint')" collapsible :default-expanded="config.retry.enabled">
+    <NodeConfigSection :title="t('designer.retryOnFailure')" :hint="t('designer.retryOnFailureHint')" collapsible>
       <template #actions><ToggleSwitch v-model="config.retry.enabled" :label="t('designer.retryOnFailure')" /></template>
       <div v-if="config.retry.enabled" class="grid grid-cols-2 gap-2 rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)] p-3">
         <FormField :label="t('designer.maxRetries')" compact><InputText v-model.number="config.retry.max_retries" type="number" min="1" max="10" /></FormField>
@@ -46,7 +46,7 @@ function updateDefaultOutput() {
       <p v-else class="muted rounded-lg bg-[var(--panel-subtle)] p-3 text-[11px]">{{ t('designer.retryDisabledHint') }}</p>
     </NodeConfigSection>
 
-    <NodeConfigSection class="border-t border-[var(--border)] pt-4" :title="t('designer.errorHandling')" :hint="t('designer.errorHandlingHint')" collapsible :default-expanded="config.error_strategy !== 'fail'">
+    <NodeConfigSection class="border-t border-[var(--border)] pt-4" :title="t('designer.errorHandling')" :hint="t('designer.errorHandlingHint')" collapsible>
       <FormField :label="t('designer.errorStrategy')" compact>
         <Select v-model="config.error_strategy" class="!h-9 !text-xs">
           <option value="fail">{{ t('designer.errorStrategies.fail') }}</option>

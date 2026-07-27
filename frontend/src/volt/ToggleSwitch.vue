@@ -10,10 +10,10 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
     :aria-checked="modelValue"
     :aria-label="label"
     :disabled="disabled"
-    class="relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+    class="relative h-5 w-9 shrink-0 rounded-full outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--primary-soft)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--panel)] disabled:cursor-not-allowed disabled:opacity-50"
     :class="modelValue ? 'bg-[var(--primary)]' : 'bg-slate-300 dark:bg-slate-600'"
     @click="emit('update:modelValue', !modelValue)"
   >
-    <span class="absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform" :class="modelValue ? 'translate-x-[18px]' : 'translate-x-0.5'"></span>
+    <span class="absolute left-0 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform" :class="modelValue ? 'translate-x-[18px]' : 'translate-x-0.5'"></span>
   </button>
 </template>

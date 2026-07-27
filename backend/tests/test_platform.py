@@ -522,6 +522,27 @@ def test_trace_input_is_resolved_and_environment_values_are_redacted():
     assert metadata["usage"] == {"input_tokens": 4, "output_tokens": 2, "total_tokens": 6}
     assert metadata["logs"] == ["token=••••••••"]
 
+
+def test_node_names_are_unique_and_resolve_chinese_variable_references():
+    graph = {
+        "nodes": [
+            {"id": "start", "type": "start", "data": {"label": "开始", "config": {"triggers": ["api"], "input_fields": [{"name": "message", "type": "text"}]}}},
+            {"id": "assign", "type": "variable", "data": {"label": "变量赋值", "config": {"assignments": [{"name": "answer", "type": "String", "operation": "overwrite", "value": "{{开始.message}}"}]}}},
+            {"id": "end", "type": "end", "data": {"label": "结束", "config": {"outputs": [{"name": "message", "type": "String", "value": "{{变量赋值.answer}}"}]}}},
+        ],
+        "edges": [
+            {"id": "a", "source": "start", "target": "assign"},
+            {"id": "b", "source": "assign", "target": "end"},
+        ],
+    }
+    result, _ = execute_graph(graph, {"message": "按名称引用成功"})
+    assert result == {"message": "按名称引用成功"}
+
+    duplicate = deepcopy(graph)
+    duplicate["nodes"][1]["data"]["label"] = "开始"
+    with pytest.raises(HTTPException, match="unique node names"):
+        workflow_engine.validate_draft_graph(duplicate)
+
 def test_structured_end_outputs_are_resolved_and_validated(client: TestClient):
     session = client.post(
         "/api/v1/auth/login",
@@ -1364,15 +1385,15 @@ def test_subworkflow_human_approval_resumes_across_the_nested_call(client: TestC
     child_graph = {
         "schema_version": 1,
         "nodes": [
-            {"id": "child-start", "type": "start", "position": {"x": 0, "y": 0}, "data": {"config": {"triggers": ["api"], "input_fields": []}}},
+            {"id": "child-start", "type": "start", "position": {"x": 0, "y": 0}, "data": {"label": "Child start", "config": {"triggers": ["api"], "input_fields": []}}},
             {
                 "id": "child-review",
                 "type": "human",
                 "position": {"x": 220, "y": 0},
                 "data": {"label": "Nested review", "config": {"submission_methods": ["studio"], "form_content": "Review nested call", "actions": [{"id": "approve", "label": "Approve", "value": "approved"}, {"id": "reject", "label": "Reject", "value": "rejected"}], "timeout_minutes": 60}},
             },
-            {"id": "child-ok", "type": "end", "position": {"x": 460, "y": -60}, "data": {"config": {"outputs": [{"name": "decision", "type": "String", "value": "approved"}]}}},
-            {"id": "child-no", "type": "end", "position": {"x": 460, "y": 60}, "data": {"config": {"outputs": [{"name": "decision", "type": "String", "value": "rejected"}]}}},
+            {"id": "child-ok", "type": "end", "position": {"x": 460, "y": -60}, "data": {"label": "Approved end", "config": {"outputs": [{"name": "decision", "type": "String", "value": "approved"}]}}},
+            {"id": "child-no", "type": "end", "position": {"x": 460, "y": 60}, "data": {"label": "Rejected end", "config": {"outputs": [{"name": "decision", "type": "String", "value": "rejected"}]}}},
         ],
         "edges": [
             {"source": "child-start", "target": "child-review"},
