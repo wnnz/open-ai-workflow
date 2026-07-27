@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { AlertTriangle, BookOpen, Bot, Braces, BrainCircuit, CircleHelp, CircleStop, Code2, Combine, FileText, GitBranch, Globe2, ListFilter, ListTree, MoreHorizontal, Play, RefreshCw, Repeat2, ScanText, StickyNote, Timer, UserCheck, Workflow, X } from 'lucide-vue-next'
+import { AlertTriangle, BookOpen, Bot, Braces, BrainCircuit, CircleHelp, CircleStop, Code2, Combine, FileText, GitBranch, GitMerge, Globe2, ListFilter, ListTree, MoreHorizontal, Play, RefreshCw, Repeat2, ScanText, StickyNote, Timer, UserCheck, Workflow, X } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import NodeActionMenu, { type NodeAction } from '@/components/designer/NodeActionMenu.vue'
 
@@ -19,7 +19,7 @@ const meta = computed(() => ({
   classifier: { icon: ListFilter, tone: 'orange' }, code: { icon: Code2, tone: 'emerald' }, script: { icon: Braces, tone: 'emerald' }, template: { icon: FileText, tone: 'sky' },
   variable: { icon: ListTree, tone: 'indigo' }, json: { icon: Code2, tone: 'cyan' }, aggregate: { icon: Combine, tone: 'indigo' }, extract: { icon: ScanText, tone: 'cyan' },
   list: { icon: ListFilter, tone: 'sky' }, knowledge: { icon: BookOpen, tone: 'amber' }, http: { icon: Globe2, tone: 'cyan' }, condition: { icon: GitBranch, tone: 'orange' },
-  human: { icon: UserCheck, tone: 'amber' }, iteration: { icon: Repeat2, tone: 'blue' }, loop: { icon: RefreshCw, tone: 'violet' }, delay: { icon: Timer, tone: 'slate' },
+  human: { icon: UserCheck, tone: 'amber' }, wait: { icon: GitMerge, tone: 'emerald' }, iteration: { icon: Repeat2, tone: 'blue' }, loop: { icon: RefreshCw, tone: 'violet' }, delay: { icon: Timer, tone: 'slate' },
   subworkflow: { icon: Workflow, tone: 'emerald' }, document: { icon: FileText, tone: 'rose' }, note: { icon: StickyNote, tone: 'amber' },
 }[props.nodeType] || { icon: Workflow, tone: 'blue' }))
 

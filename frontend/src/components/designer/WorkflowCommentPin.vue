@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { MessageSquare } from 'lucide-vue-next'
 
-defineProps<{ index: number; selected?: boolean; resolved?: boolean; label: string }>()
+defineProps<{ count: number; selected?: boolean; resolved?: boolean; label: string }>()
 defineEmits<{ select: [] }>()
 </script>
 
 <template>
   <button type="button" class="comment-pin" :class="{ selected, resolved }" :aria-label="label" @click.stop="$emit('select')">
     <MessageSquare :size="13" />
-    <span>{{ index }}</span>
+    <span>{{ count }}</span>
   </button>
 </template>
 
@@ -17,4 +17,3 @@ defineEmits<{ select: [] }>()
 .comment-pin:hover,.comment-pin.selected { transform:scale(1.12); }
 .comment-pin.resolved { background:#64748b; opacity:.65; }
 </style>
-

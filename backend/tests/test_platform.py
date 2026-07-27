@@ -1,6 +1,7 @@
 import os
 from copy import deepcopy
 from pathlib import Path
+from time import sleep as sleep_for_test
 
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test-openworkflow.db"
 Path("test-openworkflow.db").unlink(missing_ok=True)
@@ -971,6 +972,47 @@ def test_iteration_container_executes_child_graph_for_each_item():
     result, trace = execute_graph(graph, {})
     assert result == {"result": ["1!", "2!", "3!"]}
     assert [item["node_id"] for item in trace] == ["start", "iterate", "end"]
+
+
+def test_parallel_branches_continue_independently_and_wait_nodes_join(monkeypatch):
+    original = workflow_engine.execute_node_with_policy
+
+    def delayed(node, context, graph=None):
+        if node.get("id") == "slow":
+            sleep_for_test(0.2)
+        elif node.get("id") == "fast":
+            sleep_for_test(0.02)
+        return original(node, context, graph)
+
+    monkeypatch.setattr(workflow_engine, "execute_node_with_policy", delayed)
+
+    def graph(wait_mode: str):
+        return {
+            "nodes": [
+                {"id": "start", "type": "start", "data": {"config": {"triggers": ["form"], "input_fields": []}}},
+                {"id": "slow", "type": "template", "data": {"config": {"inputs": [], "template": "slow"}}},
+                {"id": "fast", "type": "template", "data": {"config": {"inputs": [], "template": "fast"}}},
+                {"id": "wait", "type": "wait", "data": {"config": {"mode": wait_mode}}},
+                {"id": "end", "type": "end", "data": {"config": {"outputs": [{"name": "done", "type": "Boolean", "value": "{{wait.completed}}"}]}}},
+            ],
+            "edges": [
+                {"id": "a", "source": "start", "target": "slow"},
+                {"id": "b", "source": "start", "target": "fast"},
+                {"id": "c", "source": "slow", "target": "wait"},
+                {"id": "d", "source": "fast", "target": "wait"},
+                {"id": "e", "source": "wait", "target": "end"},
+            ],
+        }
+
+    _, all_trace = execute_graph(graph("all"), {})
+    all_ids = [item["node_id"] for item in all_trace]
+    assert all_ids.index("fast") < all_ids.index("slow")
+    assert all_ids.index("wait") > all_ids.index("slow")
+
+    _, any_trace = execute_graph(graph("any"), {})
+    any_ids = [item["node_id"] for item in any_trace]
+    assert any_ids.index("fast") < any_ids.index("wait") < any_ids.index("slow")
+    assert "end" in any_ids and "slow" in any_ids
 
 
 def test_loop_container_stops_when_child_condition_becomes_true():

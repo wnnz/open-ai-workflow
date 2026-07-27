@@ -30,11 +30,11 @@ function preview(thread: WorkflowCommentThread) { return thread.messages.at(-1)?
 </script>
 
 <template>
-  <aside class="inspector flex w-[400px] max-w-[38vw] shrink-0 flex-col border-l border-[var(--border)] bg-[var(--panel)]" aria-label="工作流评论">
+  <aside class="inspector relative z-30 flex w-[400px] max-w-[38vw] shrink-0 flex-col border-l border-[var(--border)] bg-[var(--panel)]" aria-label="工作流评论">
     <header class="flex h-16 shrink-0 items-center gap-2 border-b border-[var(--border)] px-4">
       <button v-if="selected" type="button" class="icon-button" :aria-label="$t('designer.backToComments')" @click="emit('select', null)"><ArrowLeft :size="16" /></button>
-      <div class="min-w-0"><h2 class="text-sm font-semibold">{{ selected ? $t('designer.commentThread') : $t('designer.comments') }}</h2><p class="muted mt-0.5 text-[10px]">{{ placementActive ? $t('designer.commentPlacementHint') : $t('designer.commentsHint') }}</p></div>
-      <button v-if="!selected" type="button" class="icon-button ml-auto" :class="{ 'text-[var(--primary)]': showResolved }" :aria-label="$t('designer.filterComments')" @click="showResolved = !showResolved"><ListFilter :size="15" /></button>
+      <div class="min-w-0 flex-1"><h2 class="text-sm font-semibold">{{ selected ? $t('designer.commentThread') : $t('designer.comments') }}</h2><p class="muted mt-0.5 text-[10px]">{{ placementActive ? $t('designer.commentPlacementHint') : $t('designer.commentsHint') }}</p></div>
+      <button v-if="!selected" type="button" class="icon-button" :class="{ 'text-[var(--primary)]': showResolved }" :aria-label="$t('designer.filterComments')" @click="showResolved = !showResolved"><ListFilter :size="15" /></button>
       <button type="button" class="icon-button" :aria-label="$t('common.close')" @click="emit('close')"><X :size="16" /></button>
     </header>
 

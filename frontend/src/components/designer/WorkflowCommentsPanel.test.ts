@@ -11,5 +11,7 @@ describe('WorkflowCommentsPanel', () => {
     await wrapper.get('button.p-button').trigger('click')
     expect(wrapper.emitted('submit')?.[0]).toEqual([{ threadId: 'c1', content: 'Please review' }])
     expect(wrapper.get('button[aria-label="删除评论线程"]')).toBeTruthy()
+    expect(wrapper.get('header > button:last-child').classes()).toContain('icon-button')
+    expect(wrapper.get('aside').classes()).toContain('z-30')
   })
 })

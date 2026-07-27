@@ -35,6 +35,7 @@ export function getNodeOutputVariables(node: WorkflowNodeLike): WorkflowVariable
     human: [['approved', 'Boolean'], ['comment', 'String']],
     iteration: [['results', 'Array']],
     loop: [['result', 'Object']],
+    wait: [['completed', 'Boolean'], ['mode', 'String']],
     delay: [['completed_at', 'String']],
     subworkflow: [['output', 'Object']],
   }

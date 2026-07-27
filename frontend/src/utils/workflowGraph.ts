@@ -1,5 +1,5 @@
 export type WorkflowPoint = { x: number; y: number }
-export type WorkflowNodeLike = { id: string; type?: string; position: WorkflowPoint; parentNode?: string; extent?: string; data?: Record<string, any> }
+export type WorkflowNodeLike = { id: string; type?: string; position: WorkflowPoint; parentNode?: string; extent?: string; data?: Record<string, any>; dimensions?: { width?: number; height?: number }; style?: Record<string, any> }
 export type WorkflowEdgeLike = {
   id?: string
   source: string
@@ -50,6 +50,71 @@ export function removeWorkflowEdgeById<T extends { id?: string }>(edges: T[], ed
 
 function nodeType(node: WorkflowNodeLike | undefined) {
   return String(node?.data?.nodeType || node?.type || '')
+}
+
+function numericNodeSize(node: WorkflowNodeLike, key: 'width' | 'height', fallback: number) {
+  const styled = Number.parseFloat(String(node.style?.[key] || ''))
+  if (Number.isFinite(styled) && styled > 0) return styled
+  const measured = Number(node.dimensions?.[key])
+  return Number.isFinite(measured) && measured > 0 ? measured : fallback
+}
+
+export function absoluteNodePosition(nodes: WorkflowNodeLike[], nodeId: string): WorkflowPoint {
+  const byId = new Map(nodes.map(node => [node.id, node]))
+  const node = byId.get(nodeId)
+  if (!node) return { x: 0, y: 0 }
+  const position = { ...node.position }
+  const visited = new Set([node.id])
+  let parentId = node.parentNode
+  while (parentId && !visited.has(parentId)) {
+    visited.add(parentId)
+    const parent = byId.get(parentId)
+    if (!parent) break
+    position.x += parent.position.x
+    position.y += parent.position.y
+    parentId = parent.parentNode
+  }
+  return position
+}
+
+export function nextContainerChildPosition(nodes: WorkflowNodeLike[], parentId: string): WorkflowPoint {
+  const children = nodes.filter(node => node.parentNode === parentId && nodeType(node) !== 'note')
+  if (!children.length) return { x: 230, y: 84 }
+  const bottom = Math.max(...children.map(node => node.position.y + numericNodeSize(node, 'height', 82)))
+  return { x: 230, y: Math.ceil(bottom + 18) }
+}
+
+export function containerSizeForChildren(
+  nodes: WorkflowNodeLike[], parentId: string,
+  options: { minWidth?: number; minHeight?: number; rightPadding?: number; bottomPadding?: number } = {},
+) {
+  const children = nodes.filter(node => node.parentNode === parentId && nodeType(node) !== 'note')
+  const minWidth = options.minWidth ?? 520
+  const minHeight = options.minHeight ?? 260
+  const rightPadding = options.rightPadding ?? 36
+  const bottomPadding = options.bottomPadding ?? 36
+  if (!children.length) return { width: minWidth, height: minHeight }
+  const right = Math.max(...children.map(node => node.position.x + numericNodeSize(node, 'width', 206)))
+  const bottom = Math.max(...children.map(node => node.position.y + numericNodeSize(node, 'height', 82)))
+  return {
+    width: Math.max(minWidth, Math.ceil(right + rightPadding)),
+    height: Math.max(minHeight, Math.ceil(bottom + bottomPadding)),
+  }
+}
+
+export function containerEntryPoints(nodes: WorkflowNodeLike[], edges: WorkflowEdgeLike[], parentId: string) {
+  const children = nodes.filter(node => node.parentNode === parentId && nodeType(node) !== 'note')
+  const childIds = new Set(children.map(node => node.id))
+  const connectedTargets = new Set(edges
+    .filter(edge => childIds.has(edge.source) && childIds.has(edge.target))
+    .map(edge => edge.target))
+  return children
+    .filter(node => !connectedTargets.has(node.id))
+    .map(node => ({
+      nodeId: node.id,
+      x: node.position.x,
+      y: node.position.y + numericNodeSize(node, 'height', 82) / 2,
+    }))
 }
 
 export function findAvailableNodePosition(
@@ -200,7 +265,12 @@ export function layoutWorkflow<T extends WorkflowNodeLike>(nodes: T[], edges: Wo
   if (!validEdges.length) {
     const rank = (node: T) => nodeType(node) === 'start' ? 0 : nodeType(node) === 'end' ? 2 : 1
     const ordered = [...nodes].sort((left, right) => rank(left) - rank(right))
-    const positions = new Map(ordered.map((node, index) => [node.id, { x: 100 + index * 270, y: 180 }]))
+    let cursorX = 100
+    const positions = new Map(ordered.map(node => {
+      const position = { x: cursorX, y: 180 }
+      cursorX += numericNodeSize(node, 'width', 206) + 80
+      return [node.id, position] as const
+    }))
     return nodes.map(node => ({ ...node, position: positions.get(node.id)! }))
   }
   const incoming = new Map(nodes.map(node => [node.id, 0]))
@@ -232,15 +302,44 @@ export function layoutWorkflow<T extends WorkflowNodeLike>(nodes: T[], edges: Wo
     groups.set(nodeLayer, [...(groups.get(nodeLayer) || []), node])
   }
 
+  const orderedLayers = [...groups.keys()].sort((left, right) => left - right)
+  const layerX = new Map<number, number>()
+  let cursorX = 100
+  for (const nodeLayer of orderedLayers) {
+    layerX.set(nodeLayer, cursorX)
+    cursorX += Math.max(...groups.get(nodeLayer)!.map(node => numericNodeSize(node, 'width', 206))) + 80
+  }
+
   const positions = new Map<string, WorkflowPoint>()
   for (const [nodeLayer, group] of groups) {
-    const totalHeight = (group.length - 1) * 130
-    group.forEach((node, index) => positions.set(node.id, {
-      x: 100 + nodeLayer * 270,
-      y: 180 + index * 130 - totalHeight / 2,
-    }))
+    const heights = group.map(node => numericNodeSize(node, 'height', 82))
+    const totalHeight = heights.reduce((total, height) => total + height, 0) + Math.max(0, group.length - 1) * 48
+    let cursorY = Math.max(80, 180 - totalHeight / 2)
+    group.forEach((node, index) => {
+      positions.set(node.id, { x: layerX.get(nodeLayer)!, y: cursorY })
+      cursorY += heights[index] + 48
+    })
   }
   return nodes.map(node => ({ ...node, position: positions.get(node.id)! }))
+}
+
+export function layoutContainerChildren<T extends WorkflowNodeLike>(nodes: T[], edges: WorkflowEdgeLike[]): T[] {
+  const nodeIds = new Set(nodes.map(node => node.id))
+  const internalEdges = edges.filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target))
+  if (!internalEdges.length) {
+    let cursorY = 84
+    return [...nodes]
+      .sort((left, right) => left.position.y - right.position.y || left.position.x - right.position.x)
+      .map(node => {
+        const positioned = { ...node, position: { x: 230, y: cursorY } }
+        cursorY += numericNodeSize(node, 'height', 82) + 18
+        return positioned
+      })
+  }
+  const arranged = layoutWorkflow(nodes, internalEdges)
+  const minX = Math.min(...arranged.map(node => node.position.x))
+  const minY = Math.min(...arranged.map(node => node.position.y))
+  return arranged.map(node => ({ ...node, position: { x: node.position.x - minX + 230, y: node.position.y - minY + 84 } }))
 }
 
 export function validateWorkflowGraph(
@@ -415,6 +514,10 @@ export function validateWorkflowGraph(
       if (!methods.length || methods.some((method: string) => !['studio','link','email'].includes(method)) || !actions.length || actions.some((action: any) => !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(String(action?.id || '')) || !String(action?.label || '').trim()) || new Set(actionIds).size !== actionIds.length || !(Number(config.timeout_minutes) >= 1 && Number(config.timeout_minutes) <= 525600)) issues.push({ code: 'approvalSettingsInvalid', nodeId: node.id, params })
       const handles = new Set((outgoing.get(node.id) || []).map(edge => String((edge as any).sourceHandle || '')).filter(handle => handle.startsWith('action:')))
       if (actions.some((action: any) => !handles.has(`action:${action.id}`))) issues.push({ code: 'approvalBranchesRequired', nodeId: node.id, params })
+    }
+    if (type === 'wait') {
+      if (!['all', 'any'].includes(config.mode || 'all')) issues.push({ code: 'waitModeInvalid', nodeId: node.id, params })
+      if ((incoming.get(node.id) || []).length < 2) issues.push({ code: 'waitIncomingRequired', nodeId: node.id, params })
     }
     if (type === 'iteration') {
       if (!String(config.source || '').trim()) issues.push({ code: 'iterationSourceRequired', nodeId: node.id, params })

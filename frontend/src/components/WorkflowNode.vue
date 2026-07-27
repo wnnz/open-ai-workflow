@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Handle, Position, type NodeProps } from '@vue-flow/core'
-import { AlertTriangle, BookOpen, Bot, Braces, BrainCircuit, CheckCircle2, CircleSlash, CircleStop, Code2, Combine, FileText, GitBranch, Globe2, ListFilter, ListTree, Play, Plus, RefreshCw, Repeat2, ScanText, Timer, UserCheck, Workflow, XCircle } from 'lucide-vue-next'
+import { AlertTriangle, BookOpen, Bot, Braces, BrainCircuit, CheckCircle2, CircleSlash, CircleStop, Code2, Combine, FileText, GitBranch, GitMerge, Globe2, ListFilter, ListTree, Play, Plus, RefreshCw, Repeat2, ScanText, Timer, UserCheck, Workflow, XCircle } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import NodeActionMenu, { type NodeAction } from '@/components/designer/NodeActionMenu.vue'
 import NodeValidationBadge from '@/components/designer/NodeValidationBadge.vue'
@@ -55,6 +55,7 @@ const meta = computed(() => ({
   http: { icon: Globe2, tone: 'cyan', detail: 'HTTP' },
   condition: { icon: GitBranch, tone: 'orange', detail: props.data?.config?.conditions?.length ? `${props.data.config.conditions.length} ${t('designer.conditionCount')}` : t('designer.nodeDetails.branch') },
   human: { icon: UserCheck, tone: 'amber', detail: t('designer.nodeDetails.approval') },
+  wait: { icon: GitMerge, tone: 'emerald', detail: t('designer.nodeDetails.wait') },
   iteration: { icon: Repeat2, tone: 'blue', detail: t('designer.nodeDetails.iteration') },
   loop: { icon: RefreshCw, tone: 'violet', detail: t('designer.nodeDetails.loop') },
   delay: { icon: Timer, tone: 'slate', detail: t('designer.nodeDetails.delay') },
@@ -75,7 +76,20 @@ const meta = computed(() => ({
       </div>
       <div class="relative"><button class="node-menu" type="button" :aria-label="t('designer.more')" @click.stop="menuOpen = !menuOpen">...</button><div v-if="menuOpen" class="absolute right-0 top-6 z-30" @click.stop><NodeActionMenu :protected-node="['start','end'].includes(nodeType)" :can-change="!['iteration','loop'].includes(nodeType)" @action="nodeAction" /></div></div>
     </div>
-    <div v-if="nodeType === 'condition'" class="condition-branches"><span class="text-emerald-600">IF</span><span class="text-amber-600">ELSE</span></div>
+    <div v-if="nodeType === 'condition'" class="condition-branches">
+      <div class="condition-branch text-emerald-600">
+        <span>IF</span>
+        <Handle id="true" type="source" :position="Position.Right" class="quick-add-handle condition-handle">
+          <button type="button" :aria-label="`${t('workflow.addNode')} IF`" @click.stop="quickAdd('true', $event)"><Plus :size="12" :stroke-width="2.4" /></button>
+        </Handle>
+      </div>
+      <div class="condition-branch text-amber-600">
+        <span>ELSE</span>
+        <Handle id="false" type="source" :position="Position.Right" class="quick-add-handle condition-handle">
+          <button type="button" :aria-label="`${t('workflow.addNode')} ELSE`" @click.stop="quickAdd('false', $event)"><Plus :size="12" :stroke-width="2.4" /></button>
+        </Handle>
+      </div>
+    </div>
     <div v-else-if="nodeType === 'classifier'" class="classifier-branches">
       <div v-for="(category, index) in classifierCategories" :key="category.id || index" class="classifier-branch">
         <span class="classifier-index">{{ Number(index) + 1 }}</span><span class="truncate">{{ category.name || `${t('designer.categoryName')} ${Number(index) + 1}` }}</span>
@@ -93,13 +107,7 @@ const meta = computed(() => ({
       </div>
     </div>
     <WorkflowNodeSummary v-else :node-type="nodeType" :config="data?.config" :fallback="meta.detail" />
-    <Handle v-if="nodeType === 'condition'" id="true" type="source" :position="Position.Right" class="quick-add-handle" :style="{ top: '58%' }">
-      <button type="button" :aria-label="`${t('workflow.addNode')} IF`" @click.stop="quickAdd('true', $event)"><Plus :size="12" :stroke-width="2.4" /></button>
-    </Handle>
-    <Handle v-if="nodeType === 'condition'" id="false" type="source" :position="Position.Right" class="quick-add-handle" :style="{ top: '82%' }">
-      <button type="button" :aria-label="`${t('workflow.addNode')} ELSE`" @click.stop="quickAdd('false', $event)"><Plus :size="12" :stroke-width="2.4" /></button>
-    </Handle>
-    <Handle v-else-if="!['end','classifier','human'].includes(nodeType)" type="source" :position="Position.Right" class="quick-add-handle" :style="hasErrorBranch ? { top: '58%' } : undefined">
+    <Handle v-if="!['end','classifier','human','condition'].includes(nodeType)" type="source" :position="Position.Right" class="quick-add-handle" :style="hasErrorBranch ? { top: '58%' } : undefined">
       <button type="button" :aria-label="t('workflow.addNode')" @click.stop="quickAdd(undefined, $event)"><Plus :size="12" :stroke-width="2.4" /></button>
     </Handle>
     <Handle v-if="hasErrorBranch" id="error" type="source" :position="Position.Right" class="quick-add-handle error-handle" :style="{ top: '82%' }">
@@ -115,8 +123,8 @@ const meta = computed(() => ({
 .node-icon { display: flex; width: 28px; height: 28px; flex: none; align-items: center; justify-content: center; border-radius: 7px; background: color-mix(in srgb, var(--node-color), transparent 88%); color: var(--node-color); }
 .node-menu { width: 20px; height: 20px; border-radius: 5px; color: var(--muted); font-size: 13px; line-height: 12px; }
 .node-menu:hover { background: var(--panel-subtle); }
-.condition-branches { margin-top: 9px; display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 10px; font-weight: 700; }.condition-branches span { display: flex; height: 23px; align-items: center; justify-content: center; border-radius: 5px; background: var(--panel-subtle); }
-.classifier-branches { margin-top: 9px; display: grid; gap: 5px; }.classifier-branch { position: relative; display: flex; height: 27px; align-items: center; gap: 6px; border-radius: 5px; background: var(--panel-subtle); padding: 0 8px; color: var(--node-color); font-size: 10px; font-weight: 600; }.classifier-index { display: flex; width: 16px; height: 16px; flex: none; align-items: center; justify-content: center; border-radius: 4px; background: color-mix(in srgb, var(--node-color), transparent 86%); font-size: 9px; }.classifier-handle { top: 50% !important; right: -13px !important; transform: translateY(-50%); }
+.condition-branches { margin-top: 9px; display: grid; gap: 5px; font-size: 10px; font-weight: 700; }.condition-branch { position: relative; display: flex; height: 27px; align-items: center; border-radius: 5px; background: var(--panel-subtle); padding: 0 9px; }.condition-handle { top: 50% !important; right: -20px !important; transform: translateY(-50%); }
+.classifier-branches { margin-top: 9px; display: grid; gap: 5px; }.classifier-branch { position: relative; display: flex; height: 27px; align-items: center; gap: 6px; border-radius: 5px; background: var(--panel-subtle); padding: 0 8px; color: var(--node-color); font-size: 10px; font-weight: 600; }.classifier-index { display: flex; width: 16px; height: 16px; flex: none; align-items: center; justify-content: center; border-radius: 4px; background: color-mix(in srgb, var(--node-color), transparent 86%); font-size: 9px; }.classifier-handle { top: 50% !important; right: -20px !important; transform: translateY(-50%); }
 .quick-add-handle button { display: flex; width: 20px; height: 20px; padding: 0; align-items: center; justify-content: center; border: 1px solid var(--primary); border-radius: 50%; background: var(--panel); color: var(--primary); line-height: 0; box-shadow: 0 1px 3px rgb(16 24 40 / 12%); }
 .quick-add-handle button svg { display: block; flex: none; }
 .quick-add-handle button:hover { background: var(--primary); color: white; }

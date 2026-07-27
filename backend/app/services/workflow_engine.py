@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict, deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait as wait_for_futures
 from copy import deepcopy
 from datetime import UTC, datetime
 from time import sleep
@@ -95,8 +95,6 @@ def validate_draft_graph(graph: dict[str, Any]) -> None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Annotations cannot be connected")
         if node_parents.get(edge.get("source")) != node_parents.get(edge.get("target")):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Edges cannot cross a container boundary")
-
-
 def validate_graph(graph: dict[str, Any]) -> None:
     nodes = graph.get("nodes", [])
     edges = graph.get("edges", [])
@@ -150,6 +148,8 @@ def validate_graph(graph: dict[str, Any]) -> None:
         validate_iteration_config(iteration_node.get("data", {}).get("config", {}))
     for loop_node in (node for node in nodes if node.get("type") == "loop"):
         validate_loop_config(loop_node.get("data", {}).get("config", {}))
+    for wait_node in (node for node in nodes if node.get("type") == "wait"):
+        validate_wait_config(wait_node.get("data", {}).get("config", {}))
     for policy_node in (node for node in nodes if node.get("type") in EXECUTION_POLICY_NODE_TYPES):
         validate_execution_policy(policy_node.get("data", {}).get("config", {}))
     node_types = {node.get("id"): node.get("type") for node in nodes}
@@ -162,7 +162,7 @@ def validate_graph(graph: dict[str, Any]) -> None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Unsupported nested node type")
     for container in (node for node in nodes if node.get("type") in {"iteration", "loop"}):
         if not any(node.get("parentNode") == container.get("id") for node in nodes):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Iteration and loop containers require at least one child node")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Containers require at least one child node")
     for edge in edges:
         if edge.get("source") not in node_ids or edge.get("target") not in node_ids:
             raise HTTPException(
@@ -174,6 +174,9 @@ def validate_graph(graph: dict[str, Any]) -> None:
             )
         if node_parents.get(edge.get("source")) != node_parents.get(edge.get("target")):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Edges cannot cross a container boundary")
+    for wait_node in (node for node in nodes if node.get("type") == "wait"):
+        if len([edge for edge in edges if edge.get("target") == wait_node.get("id")]) < 2:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Wait nodes require at least two incoming branches")
     for classifier_node in (node for node in nodes if node.get("type") == "classifier"):
         category_handles = {
             f"category:{category['id']}"
@@ -437,6 +440,11 @@ def validate_loop_config(config: dict[str, Any]) -> None:
     maximum = config.get("max_iterations", 10)
     if not isinstance(maximum, int) or not 1 <= maximum <= 100:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid loop iteration limit")
+
+
+def validate_wait_config(config: dict[str, Any]) -> None:
+    if config.get("mode", "all") not in {"all", "any"}:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid wait mode")
 
 
 def normalized_human_actions(config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -852,6 +860,7 @@ TRACE_INPUT_KEYS: dict[str, tuple[str, ...]] = {
     "human": ("form_content", "submission_methods", "actions"),
     "iteration": ("source", "item_variable", "mode", "concurrency"),
     "loop": ("condition", "max_iterations"),
+    "wait": ("mode",),
     "delay": ("seconds",),
     "subworkflow": ("workflow_id", "inputs"),
     "document": ("operation", "source", "extract_mode", "page_range", "output_format"),
@@ -925,6 +934,117 @@ def build_node_trace_metadata(
     }
 
 
+def execute_parallel_graph(
+    graph: dict[str, Any], inputs: dict[str, Any], environment: dict[str, Any] | None = None,
+    system: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    nodes = {
+        node["id"]: node
+        for node in graph["nodes"]
+        if node.get("type") != "note" and not node.get("parentNode")
+    }
+    incoming = defaultdict(int)
+    outgoing: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for edge in graph.get("edges", []):
+        if edge["source"] in nodes and edge["target"] in nodes:
+            incoming[edge["target"]] += 1
+            outgoing[edge["source"]].append(edge)
+    ready = deque(node_id for node_id in nodes if incoming[node_id] == 0)
+    reachable = {node_id for node_id, node in nodes.items() if node.get("type") == "start"}
+    context: dict[str, Any] = {
+        "inputs": deepcopy(inputs), "env": deepcopy(environment or {}), "sys": deepcopy(system or {})
+    }
+    trace: list[dict[str, Any]] = []
+    running: dict[Future[Any], str] = {}
+    visited = 0
+
+    def run_node(node_id: str, run_context: dict[str, Any]) -> dict[str, Any]:
+        node = nodes[node_id]
+        started = datetime.now(UTC)
+        trace_input = build_node_trace_input(node, run_context)
+        output, execution_status, execution_error, execution_attempts = execute_node_with_policy(node, run_context, graph)
+        return {
+            "output": output,
+            "status": execution_status,
+            "error": execution_error,
+            "attempts": execution_attempts,
+            "trace_input": trace_input,
+            "started": started,
+            "finished": datetime.now(UTC),
+            "context": run_context,
+        }
+
+    def complete_node(node_id: str, execution: dict[str, Any] | None) -> None:
+        nonlocal visited
+        node = nodes[node_id]
+        node_type = node.get("type")
+        output = execution["output"] if execution else None
+        execution_status = execution["status"] if execution else "skipped"
+        if execution:
+            store_node_output(context, node, output, graph)
+            duration_ms = (execution["finished"] - execution["started"]).total_seconds() * 1000
+            trace.append({
+                "node_id": node_id,
+                "node_type": node_type,
+                "status": execution_status,
+                "input": execution["trace_input"],
+                "output": output,
+                "metadata": build_node_trace_metadata(
+                    node, execution["trace_input"], output, duration_ms, execution["attempts"], execution["context"]
+                ),
+                "error": execution["error"],
+                "attempts": execution["attempts"],
+                "error_handled": execution_status == "recovered",
+                "started_at": execution["started"].isoformat(),
+                "finished_at": execution["finished"].isoformat(),
+            })
+        visited += 1
+        active_branch = None
+        if execution and node_type == "condition":
+            active_branch = "true" if bool(output.get("result")) else "false"
+        elif execution and node_type == "classifier":
+            active_branch = str(output.get("branch") or "")
+        elif execution and execution_status == "recovered" and node.get("data", {}).get("config", {}).get("error_strategy") == "error_branch":
+            active_branch = "error"
+        for edge in outgoing[node_id]:
+            target = edge["target"]
+            edge_handle = str(edge.get("sourceHandle") or "")
+            uses_error_branch = node.get("data", {}).get("config", {}).get("error_strategy") == "error_branch"
+            branch_matches = edge_handle == active_branch if active_branch is not None else not (uses_error_branch and edge_handle == "error")
+            active_edge = node_id in reachable and branch_matches
+            if active_edge:
+                reachable.add(target)
+            wait_mode = nodes[target].get("data", {}).get("config", {}).get("mode", "all") if nodes[target].get("type") == "wait" else "all"
+            if wait_mode == "any":
+                if active_edge and incoming[target] > 0:
+                    incoming[target] = 0
+                    ready.append(target)
+                continue
+            incoming[target] -= 1
+            if incoming[target] == 0:
+                ready.append(target)
+
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(nodes)))) as executor:
+        while ready or running:
+            while ready:
+                node_id = ready.popleft()
+                if node_id not in reachable:
+                    complete_node(node_id, None)
+                    continue
+                running[executor.submit(run_node, node_id, deepcopy(context))] = node_id
+            if not running:
+                continue
+            completed, _ = wait_for_futures(running, return_when=FIRST_COMPLETED)
+            for future in completed:
+                node_id = running.pop(future)
+                complete_node(node_id, future.result())
+    if visited != len(nodes):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Graph contains an unsupported cycle")
+    end_nodes = [node for node in nodes.values() if node.get("type") == "end"]
+    executed_end = next((node for node in reversed(end_nodes) if node["id"] in context), None)
+    return context.get(executed_end["id"], {}) if executed_end else {}, trace
+
+
 def execute_graph(
     graph: dict[str, Any], inputs: dict[str, Any], resume_state: dict[str, Any] | None = None,
     environment: dict[str, Any] | None = None,
@@ -933,6 +1053,12 @@ def execute_graph(
     """Execute deterministic built-in nodes. Remote/AI/script nodes are dispatched by workers later."""
     validate_graph(graph)
     validate_run_inputs(graph, inputs)
+    pause_capable = any(
+        node.get("type") in {"human", "subworkflow"} and not node.get("parentNode")
+        for node in graph.get("nodes", [])
+    )
+    if not resume_state and not pause_capable:
+        return execute_parallel_graph(graph, inputs, environment=environment, system=system)
     nodes = {
         node["id"]: node
         for node in graph["nodes"]
@@ -1055,6 +1181,11 @@ def execute_graph(
             )
             if node_id in reachable and branch_matches:
                 reachable.add(target)
+            if nodes[target].get("type") == "wait" and nodes[target].get("data", {}).get("config", {}).get("mode", "all") == "any":
+                if node_id in reachable and branch_matches and incoming[target] > 0:
+                    incoming[target] = 0
+                    queue.append(target)
+                continue
             incoming[target] -= 1
             if incoming[target] == 0:
                 queue.append(target)
@@ -1362,6 +1493,8 @@ def execute_node(node: dict[str, Any], context: dict[str, Any]) -> Any:
             return {**grouped, "output": grouped}
         values = config.get("variables", [])
         return {"output": first_non_null(values), "values": values}
+    if node_type == "wait":
+        return {"completed": True, "mode": config.get("mode", "all")}
     if node_type == "list":
         source = config.get("source", [])
         if not isinstance(source, list):

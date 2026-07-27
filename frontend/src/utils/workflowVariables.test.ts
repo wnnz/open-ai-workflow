@@ -133,4 +133,12 @@ describe('workflow variable catalog', () => {
       expect.objectContaining({ path: 'code-1._elapsed_ms', type: 'Number' }),
     ]))
   })
+
+  it('exposes wait outputs', () => {
+    const wait = { id: 'wait-1', type: 'wait', position: { x: 0, y: 0 }, data: { nodeType: 'wait', label: '等待完成', config: { mode: 'all' } } }
+    expect(getNodeOutputVariables(wait)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: '等待完成.completed', type: 'Boolean' }),
+      expect.objectContaining({ path: '等待完成.mode', type: 'String' }),
+    ]))
+  })
 })

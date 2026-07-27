@@ -5,11 +5,11 @@ import { describe, expect, it } from 'vitest'
 import { i18n } from '@/i18n'
 import WorkflowNode from './WorkflowNode.vue'
 
-function renderNode(selected = false) {
+function renderNode(selected = false, type = 'llm') {
   return mount(WorkflowNode, {
     props: {
       id: 'llm-1',
-      type: 'llm',
+      type,
       selected,
       connectable: true,
       position: { x: 0, y: 0 },
@@ -18,7 +18,7 @@ function renderNode(selected = false) {
       resizing: false,
       zIndex: 0,
       events: {},
-      data: { label: 'LLM', nodeType: 'llm', config: {} },
+      data: { label: type === 'condition' ? '条件分支' : 'LLM', nodeType: type, config: {} },
     } as any,
     global: {
       plugins: [i18n],
@@ -47,5 +47,16 @@ describe('WorkflowNode', () => {
     await wrapper.vm.$nextTick()
 
     expect(wrapper.find('[role="menu"]').exists()).toBe(false)
+  })
+
+  it('aligns each condition label with its own branch add button', () => {
+    const wrapper = renderNode(false, 'condition')
+    const branches = wrapper.findAll('.condition-branch')
+
+    expect(branches).toHaveLength(2)
+    expect(branches[0].text()).toContain('IF')
+    expect(branches[0].get('button').attributes('aria-label')).toBe('添加节点 IF')
+    expect(branches[1].text()).toContain('ELSE')
+    expect(branches[1].get('button').attributes('aria-label')).toBe('添加节点 ELSE')
   })
 })

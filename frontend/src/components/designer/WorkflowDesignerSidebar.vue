@@ -51,7 +51,7 @@ const navigation: Array<{ id: DesignerSection; icon: typeof Sparkles; label: str
   <aside class="designer-sidebar flex shrink-0 flex-col border-r border-[var(--border)] bg-[var(--panel)] transition-[width] duration-200" :class="collapsed ? 'w-14' : 'w-60'">
     <div class="flex h-12 items-center gap-2 border-b border-[var(--border)] px-3">
       <button v-if="!collapsed" class="icon-button" :title="t('workflow.back')" :aria-label="t('workflow.back')" @click="emit('back')"><ArrowLeft :size="16" /></button>
-      <template v-if="!collapsed"><span class="muted text-xs">/</span><span class="text-sm font-medium">{{ t('studio.title') }}</span></template>
+      <span v-if="!collapsed" class="text-sm font-medium">{{ t('studio.title') }}</span>
       <button class="icon-button" :class="!collapsed && 'ml-auto'" :title="collapsed ? t('designer.expandSidebar') : t('designer.collapseSidebar')" :aria-label="collapsed ? t('designer.expandSidebar') : t('designer.collapseSidebar')" @click="emit('toggleCollapsed')"><PanelLeftOpen v-if="collapsed" :size="16" /><ChevronLeft v-else :size="16" /></button>
     </div>
 

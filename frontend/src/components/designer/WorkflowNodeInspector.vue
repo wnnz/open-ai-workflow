@@ -27,7 +27,7 @@ const { t } = useI18n()
 </script>
 
 <template>
-  <aside class="inspector flex w-[400px] max-w-[38vw] shrink-0 flex-col border-l border-[var(--border)] bg-[var(--panel)]">
+  <aside class="inspector relative z-30 flex w-[400px] max-w-[38vw] shrink-0 flex-col border-l border-[var(--border)] bg-[var(--panel)]">
     <NodeInspectorHeader
       :node="node"
       :node-type="nodeType"

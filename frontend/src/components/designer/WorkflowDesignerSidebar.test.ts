@@ -18,6 +18,7 @@ describe('WorkflowDesignerSidebar', () => {
     })
 
     expect(wrapper.text()).toContain('文档助手')
+    expect(wrapper.find('aside > div').text()).toBe('工作室')
     expect(wrapper.text()).toContain('访问 API')
     expect(wrapper.get('button[aria-current="page"]').text()).toContain('编排')
     await wrapper.findAll('nav button').find(button => button.text().includes('访问 API'))!.trigger('click')

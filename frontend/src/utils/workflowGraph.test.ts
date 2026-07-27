@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clearWorkflowEdgeSelection, findAvailableNodePosition, insertNodeOnEdge, isConnectionAllowed, layoutWorkflow, mergeWorkflowEdges, removeWorkflowEdgeById, replaceWorkflowNode, validateWorkflowGraph, type WorkflowEdgeLike } from './workflowGraph'
+import { absoluteNodePosition, clearWorkflowEdgeSelection, containerEntryPoints, containerSizeForChildren, findAvailableNodePosition, insertNodeOnEdge, isConnectionAllowed, layoutContainerChildren, layoutWorkflow, mergeWorkflowEdges, nextContainerChildPosition, removeWorkflowEdgeById, replaceWorkflowNode, validateWorkflowGraph, type WorkflowEdgeLike } from './workflowGraph'
 
 const nodes = [
   { id: 'start', type: 'start', position: { x: 0, y: 0 }, data: { nodeType: 'start' } },
@@ -49,6 +49,40 @@ describe('workflow graph utilities', () => {
     expect(findAvailableNodePosition([child], { x: 230, y: 84 }, { parentNode: 'iteration' })).toEqual({ x: 230, y: 204 })
   })
 
+  it('positions container children compactly and keeps padded bounds', () => {
+    const container = { id: 'iteration', type: 'iteration', position: { x: 400, y: 160 }, style: { width: '800px', height: '700px' } }
+    const first = { id: 'first', type: 'template', parentNode: 'iteration', position: { x: 230, y: 84 }, dimensions: { width: 206, height: 82 } }
+    const second = { id: 'second', type: 'template', parentNode: 'iteration', position: { x: 230, y: 184 }, dimensions: { width: 206, height: 96 } }
+    const graphNodes = [container, first, second]
+
+    expect(nextContainerChildPosition(graphNodes, 'iteration')).toEqual({ x: 230, y: 298 })
+    expect(containerSizeForChildren(graphNodes, 'iteration')).toEqual({ width: 520, height: 316 })
+    expect(absoluteNodePosition(graphNodes, 'second')).toEqual({ x: 630, y: 344 })
+  })
+
+  it('allows a container to shrink again after a child moves inward', () => {
+    const container = { id: 'iteration', type: 'iteration', position: { x: 0, y: 0 }, style: { width: '900px', height: '900px' } }
+    const child = { id: 'child', type: 'template', parentNode: 'iteration', position: { x: 620, y: 600 }, dimensions: { width: 206, height: 82 } }
+    expect(containerSizeForChildren([container, child], 'iteration')).toEqual({ width: 862, height: 718 })
+
+    child.position = { x: 230, y: 84 }
+    expect(containerSizeForChildren([container, child], 'iteration')).toEqual({ width: 520, height: 260 })
+  })
+
+  it('connects the visual container start to every child entry node', () => {
+    const children = [
+      { id: 'first', type: 'template', parentNode: 'iteration', position: { x: 230, y: 84 }, dimensions: { height: 82 } },
+      { id: 'second', type: 'template', parentNode: 'iteration', position: { x: 230, y: 184 }, dimensions: { height: 96 } },
+      { id: 'parallel', type: 'template', parentNode: 'iteration', position: { x: 230, y: 300 }, dimensions: { height: 82 } },
+    ]
+    const entries = containerEntryPoints(children, [{ source: 'first', target: 'second' }], 'iteration')
+
+    expect(entries).toEqual([
+      { nodeId: 'first', x: 230, y: 125 },
+      { nodeId: 'parallel', x: 230, y: 341 },
+    ])
+  })
+
   it('rejects duplicate, reversed terminal, self, and cyclic connections', () => {
     const edges = [{ id: 'a', source: 'start', target: 'task' }, { id: 'legacy-duplicate', source: 'start', target: 'task' }]
     expect(isConnectionAllowed(nodes, edges, { source: 'start', target: 'task' })).toBe(false)
@@ -67,6 +101,41 @@ describe('workflow graph utilities', () => {
     ])
     expect(laidOut.find(node => node.id === 'start')!.position.x).toBeLessThan(laidOut.find(node => node.id === 'task')!.position.x)
     expect(laidOut.find(node => node.id === 'task')!.position.x).toBeLessThan(laidOut.find(node => node.id === 'end')!.position.x)
+  })
+
+  it('uses measured container widths so adjacent layers do not overlap', () => {
+    const large = { id: 'large', type: 'iteration', position: { x: 0, y: 0 }, style: { width: '720px', height: '420px' } }
+    const next = { id: 'next', type: 'template', position: { x: 0, y: 0 }, dimensions: { width: 206, height: 82 } }
+    const laidOut = layoutWorkflow([large, next], [{ source: 'large', target: 'next' }])
+    const largePosition = laidOut.find(node => node.id === 'large')!.position
+    const nextPosition = laidOut.find(node => node.id === 'next')!.position
+    expect(nextPosition.x).toBeGreaterThanOrEqual(largePosition.x + 720 + 80)
+  })
+
+  it('uses resized container styles instead of stale measured dimensions', () => {
+    const iteration = { id: 'iteration', type: 'iteration', position: { x: 0, y: 0 }, dimensions: { width: 900, height: 900 }, style: { width: '520px', height: '260px' } }
+    const sibling = { id: 'sibling', type: 'template', position: { x: 0, y: 0 }, dimensions: { width: 206, height: 82 } }
+    const end = { id: 'end', type: 'end', position: { x: 0, y: 0 }, dimensions: { width: 206, height: 82 } }
+    const laidOut = layoutWorkflow([iteration, sibling, end], [
+      { source: 'iteration', target: 'end' },
+      { source: 'sibling', target: 'end' },
+    ])
+
+    expect(laidOut.find(node => node.id === 'sibling')!.position.y).toBeLessThan(500)
+    expect(laidOut.find(node => node.id === 'end')!.position.x).toBeGreaterThanOrEqual(700)
+  })
+
+  it('stacks disconnected same-level container children in one column', () => {
+    const children = [
+      { id: 'third', type: 'template', position: { x: 600, y: 300 }, dimensions: { width: 206, height: 96 } },
+      { id: 'first', type: 'template', position: { x: 100, y: 100 }, dimensions: { width: 206, height: 82 } },
+      { id: 'second', type: 'template', position: { x: 300, y: 100 }, dimensions: { width: 206, height: 82 } },
+    ]
+    const laidOut = layoutContainerChildren(children, [])
+
+    expect(laidOut.map(node => node.position.x)).toEqual([230, 230, 230])
+    expect(laidOut.map(node => node.id)).toEqual(['first', 'second', 'third'])
+    expect(laidOut.map(node => node.position.y)).toEqual([84, 184, 284])
   })
 
   it('uses start, regular nodes, and end order for an unconnected draft', () => {
@@ -314,6 +383,22 @@ describe('workflow graph utilities', () => {
     expect(isConnectionAllowed(graphNodes, graphEdges, { source: 'start', target: 'child' })).toBe(false)
     expect(isConnectionAllowed(graphNodes, graphEdges, { source: 'child', target: 'end' })).toBe(false)
     expect(validateWorkflowGraph([start, iteration, end], graphEdges).map(issue => issue.code)).toContain('containerBodyRequired')
+  })
+
+  it('validates wait nodes', () => {
+    const start = { ...nodes[0], data: { nodeType: 'start', label: 'Start', config: { triggers: ['api'], input_fields: [] } } }
+    const branch = (id: string) => ({ id, type: 'template', position: { x: 0, y: 0 }, data: { nodeType: 'template', label: id, config: { inputs: [], template: id } } })
+    const wait = { id: 'wait', type: 'wait', position: { x: 0, y: 0 }, data: { nodeType: 'wait', label: 'Wait', config: { mode: 'all' } } }
+    const end = { ...nodes[2], data: { nodeType: 'end', label: 'End', config: { outputs: [{ name: 'completed', type: 'Boolean', value: '{{wait.completed}}' }] } } }
+    const graphNodes = [start, branch('a'), branch('b'), wait, end]
+    const graphEdges = [
+      { source: 'start', target: 'a' }, { source: 'start', target: 'b' },
+      { source: 'a', target: 'wait' }, { source: 'b', target: 'wait' },
+      { source: 'wait', target: 'end' },
+    ]
+
+    expect(validateWorkflowGraph(graphNodes, graphEdges)).toEqual([])
+    expect(validateWorkflowGraph(graphNodes, graphEdges.filter(edge => !(edge.source === 'b' && edge.target === 'wait'))).map(issue => issue.code)).toContain('waitIncomingRequired')
   })
 
   it('keeps annotations outside connections, layout, and validation', () => {

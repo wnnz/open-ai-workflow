@@ -5,7 +5,7 @@ import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { Background } from '@vue-flow/background'
 import { VueFlow, useVueFlow, type Connection, type Edge, type Node, type NodeMouseEvent } from '@vue-flow/core'
 import { MiniMap } from '@vue-flow/minimap'
-import { Activity, AlertTriangle, ArrowLeft, BookOpen, Bot, Braces, BrainCircuit, Check, ChevronRight, CircleStop, Clock3, Code2, Combine, Copy, FileText, GitBranch, Globe2, History, ListChecks, ListFilter, ListTree, MousePointer2, Play, Plus, RefreshCw, Repeat2, Rocket, Save, ScanText, Search, Timer, UserCheck, Workflow, X } from 'lucide-vue-next'
+import { Activity, AlertTriangle, ArrowLeft, BookOpen, Bot, Braces, BrainCircuit, Check, ChevronRight, CircleStop, Clock3, Code2, Combine, Copy, FileText, GitBranch, GitMerge, Globe2, History, ListChecks, ListFilter, ListTree, MousePointer2, Play, Plus, RefreshCw, Repeat2, Rocket, Save, ScanText, Search, Timer, UserCheck, Workflow, X } from 'lucide-vue-next'
 import api from '@/api/client'
 import { messages } from '@/i18n'
 import VariableField from '@/components/VariableField.vue'
@@ -23,6 +23,7 @@ import JsonEditorField from '@/components/designer/JsonEditorField.vue'
 import KnowledgeConfigPanel from '@/components/designer/KnowledgeConfigPanel.vue'
 import ListOperatorConfigPanel from '@/components/designer/ListOperatorConfigPanel.vue'
 import LoopConfigPanel from '@/components/designer/LoopConfigPanel.vue'
+import WaitConfigPanel from '@/components/designer/WaitConfigPanel.vue'
 import LlmConfigPanel from '@/components/designer/LlmConfigPanel.vue'
 import NextStepPanel from '@/components/designer/NextStepPanel.vue'
 import NodeActionMenu, { type NodeAction } from '@/components/designer/NodeActionMenu.vue'
@@ -60,7 +61,7 @@ import Button from '@/volt/Button.vue'
 import InputText from '@/volt/InputText.vue'
 import Select from '@/volt/Select.vue'
 import Textarea from '@/volt/Textarea.vue'
-import { clearWorkflowEdgeSelection, findAvailableNodePosition, insertNodeOnEdge, isConnectionAllowed, layoutWorkflow, mergeWorkflowEdges, removeWorkflowEdgeById, replaceWorkflowNode, validateWorkflowGraph, type WorkflowValidationIssue } from '@/utils/workflowGraph'
+import { absoluteNodePosition, clearWorkflowEdgeSelection, containerSizeForChildren, findAvailableNodePosition, insertNodeOnEdge, isConnectionAllowed, layoutContainerChildren, layoutWorkflow, mergeWorkflowEdges, nextContainerChildPosition, removeWorkflowEdgeById, replaceWorkflowNode, validateWorkflowGraph, type WorkflowValidationIssue } from '@/utils/workflowGraph'
 import { coerceWorkflowInputValues, createWorkflowInputValues } from '@/utils/workflowInputs'
 import { buildRunOverlay, clearRunOverlay as clearGraphRunOverlay, stripRuntimeData } from '@/utils/workflowRunOverlay'
 import { allocateDefaultNodeName, ensureUniqueNodeNames, nextUniqueNodeName, nodeReferenceName, rewriteNodeReferences, validateNodeName, type NodeNameError, type NodeRename } from '@/utils/workflowNodeNames'
@@ -145,7 +146,7 @@ const zoomPercent = computed(() => Math.round(viewport.value.zoom * 100))
 const paletteStyle = computed(() => ({ left: `${palettePosition.value.x}px`, top: `${palettePosition.value.y}px` }))
 const validationIssues = computed(() => validateWorkflowGraph(nodes.value as any[], currentCanvasEdges() as any[]))
 const actionableSelectionCount = computed(() => selectedCanvasNodes().length)
-const visibleCommentPins = computed(() => comments.value.map((comment, index) => ({ comment, index: index + 1 })))
+const visibleCommentPins = computed(() => comments.value.map((comment, index) => ({ comment, index: index + 1, count: comment.messages.length })))
 const contextMenuProtected = computed(() => {
   const node = nodeContextMenu.value ? (nodes.value as any[]).find(item => item.id === nodeContextMenu.value?.nodeId) : null
   return ['start', 'end'].includes(String(node?.data?.nodeType || node?.type || ''))
@@ -161,7 +162,7 @@ const saveState = computed<'idle' | 'dirty' | 'saving' | 'saved' | 'error' | 'co
   return lastSavedAt.value ? 'saved' : 'idle'
 })
 const localHistoryEntries = computed(() => graphHistory.value.map((state, index) => ({ state, index, time: historyTimes.value[index] })).reverse())
-const nodeTypes = { ...Object.fromEntries(['start', 'end', 'default', 'llm', 'agent', 'classifier', 'code', 'script', 'template', 'variable', 'json', 'aggregate', 'extract', 'list', 'knowledge', 'http', 'condition', 'human', 'delay', 'subworkflow', 'document'].map(type => [type, markRaw(WorkflowNode)])), iteration: markRaw(WorkflowContainerNode), loop: markRaw(WorkflowContainerNode), note: markRaw(WorkflowNoteNode) }
+const nodeTypes = { ...Object.fromEntries(['start', 'end', 'default', 'llm', 'agent', 'classifier', 'code', 'script', 'template', 'variable', 'json', 'aggregate', 'extract', 'list', 'knowledge', 'http', 'condition', 'human', 'wait', 'delay', 'subworkflow', 'document'].map(type => [type, markRaw(WorkflowNode)])), iteration: markRaw(WorkflowContainerNode), loop: markRaw(WorkflowContainerNode), note: markRaw(WorkflowNoteNode) }
 const edgeTypes = { workflow: markRaw(WorkflowEdge) }
 const paletteSections = computed(() => {
   const query = paletteQuery.value.trim().toLocaleLowerCase()
@@ -169,7 +170,7 @@ const paletteSections = computed(() => {
     { key: 'ai', items: [{ type: 'agent', icon: BrainCircuit }, { type: 'llm', icon: Bot }, { type: 'knowledge', icon: BookOpen }, { type: 'end', icon: CircleStop }, { type: 'classifier', icon: ListFilter }] },
     { key: 'data', items: [{ type: 'template', icon: FileText }, { type: 'variable', icon: ListTree }, { type: 'json', icon: Code2 }, { type: 'aggregate', icon: Combine }, { type: 'extract', icon: ScanText }, { type: 'list', icon: ListFilter }] },
     { key: 'tools', items: [{ type: 'code', icon: Code2 }, { type: 'script', icon: Braces }, { type: 'http', icon: Globe2 }, { type: 'document', icon: FileText }] },
-    { key: 'logic', items: [{ type: 'condition', icon: GitBranch }, { type: 'human', icon: UserCheck }, { type: 'iteration', icon: Repeat2 }, { type: 'loop', icon: RefreshCw }, { type: 'subworkflow', icon: Workflow }, { type: 'delay', icon: Timer }] },
+    { key: 'logic', items: [{ type: 'condition', icon: GitBranch }, { type: 'wait', icon: GitMerge }, { type: 'human', icon: UserCheck }, { type: 'iteration', icon: Repeat2 }, { type: 'loop', icon: RefreshCw }, { type: 'subworkflow', icon: Workflow }, { type: 'delay', icon: Timer }] },
   ]
   return sections.map(section => ({ ...section, items: section.items.filter(item => {
     if (paletteParentId.value && ['iteration', 'loop'].includes(item.type)) return false
@@ -212,6 +213,7 @@ function defaultNodeConfig(type: string) {
     human: { submission_methods: ['studio'], form_content: '', actions: [{ id: 'approve', label: t('designer.approve'), value: 'approved', style: 'primary' }, { id: 'reject', label: t('designer.reject'), value: 'rejected', style: 'danger' }], timeout_minutes: 4320 },
     iteration: { source: '', item_variable: 'item', output: '', mode: 'sequential', concurrency: 1 },
     loop: { condition: '', max_iterations: 10, output: '' },
+    wait: { mode: 'all' },
     delay: { seconds: 60 },
     subworkflow: { workflow_id: '', inputs: {} },
     document: { operation: 'extract', source: '{{inputs.file}}', extract_mode: 'text', page_range: '', ocr_fallback: true },
@@ -424,10 +426,16 @@ async function load() {
   loaded.value = false
   const { data } = await api.get(`/workspaces/${workspaceId.value}/workflows/${workflowId.value}`)
   workflow.value = data
-  const draftStart = data.draft_graph.nodes.find((node: any) => String(node.data?.nodeType || node.type) === 'start')
+  const sequenceIds = new Set<string>(data.draft_graph.nodes.filter((node: any) => String(node.data?.nodeType || node.type) === 'sequence').map((node: any) => node.id))
+  const removedSequenceNodeIds = new Set<string>([
+    ...sequenceIds,
+    ...data.draft_graph.nodes.filter((node: any) => sequenceIds.has(String(node.parentNode || ''))).map((node: any) => node.id),
+  ])
+  const draftNodes = data.draft_graph.nodes.filter((node: any) => !removedSequenceNodeIds.has(node.id))
+  const draftStart = draftNodes.find((node: any) => String(node.data?.nodeType || node.type) === 'start')
   const draftInputFields = draftStart?.data?.config?.input_fields || []
   const localizedRenames: NodeRename[] = []
-  let loadedNodes = data.draft_graph.nodes.map((node: Node) => {
+  let loadedNodes = draftNodes.map((node: Node) => {
     const nodeType = String(node.data?.nodeType || node.type)
     const defaults: Record<string, string[]> = { start: ['Start', '开始'], end: ['End', '结束'] }
     const baseConfig = nodeType === 'start' ? {
@@ -458,9 +466,9 @@ async function load() {
   loadedNodes = uniqueNames.nodes
   const beforeReferenceMigration = JSON.stringify(loadedNodes.map((node: any) => node.data?.config || {}))
   loadedNodes = replaceReferences(loadedNodes, [{ from: 'inputs', to: startReferenceName(loadedNodes) }])
-  const migrated = Boolean(localizedRenames.length || uniqueNames.renames.length || beforeReferenceMigration !== JSON.stringify(loadedNodes.map((node: any) => node.data?.config || {})))
+  const migrated = Boolean(removedSequenceNodeIds.size || localizedRenames.length || uniqueNames.renames.length || beforeReferenceMigration !== JSON.stringify(loadedNodes.map((node: any) => node.data?.config || {})))
   nodes.value = loadedNodes as Node[]
-  const loadedEdges = data.draft_graph.edges.map((edge: Edge) => ({ ...edge, type: 'workflow' }))
+  const loadedEdges = data.draft_graph.edges.filter((edge: Edge) => !removedSequenceNodeIds.has(edge.source) && !removedSequenceNodeIds.has(edge.target)).map((edge: Edge) => ({ ...edge, type: 'workflow' }))
   commitEdges(loadedEdges)
   comments.value = normalizeWorkflowComments(data.draft_graph.comments)
   syncClassifierEdgeLabels()
@@ -852,11 +860,23 @@ function openNodeContextMenu(payload: { event: MouseEvent | TouchEvent; node: No
   selectOnlyCanvasNode(payload.node.id)
 }
 function autoLayout() {
-  const topLevel = (nodes.value as any[]).filter(node => !node.parentNode)
+  let laidOutNodes = (nodes.value as any[]).map(node => ({ ...node, position: { ...node.position }, style: node.style ? { ...node.style } : undefined }))
+  const canvasEdges = currentCanvasEdges() as any[]
+  for (const container of laidOutNodes.filter(node => !node.parentNode && ['iteration', 'loop'].includes(String(node.data?.nodeType || node.type)))) {
+    const children = laidOutNodes.filter(node => node.parentNode === container.id)
+    if (!children.length) continue
+    const childIds = new Set(children.map(node => node.id))
+    const arrangedChildren = layoutContainerChildren(children, canvasEdges.filter(edge => childIds.has(edge.source) && childIds.has(edge.target)))
+    const positions = new Map(arrangedChildren.map(node => [node.id, node.position]))
+    laidOutNodes = laidOutNodes.map(node => positions.has(node.id) ? { ...node, position: positions.get(node.id)! } : node)
+    const size = containerSizeForChildren(laidOutNodes, container.id)
+    laidOutNodes = laidOutNodes.map(node => node.id === container.id ? { ...node, style: { ...(node.style || {}), width: `${size.width}px`, height: `${size.height}px` } } : node)
+  }
+  const topLevel = laidOutNodes.filter(node => !node.parentNode)
   const topIds = new Set(topLevel.map(node => node.id))
-  const laidOut = layoutWorkflow(topLevel, (currentCanvasEdges() as any[]).filter(edge => topIds.has(edge.source) && topIds.has(edge.target)))
+  const laidOut = layoutWorkflow(topLevel, canvasEdges.filter(edge => topIds.has(edge.source) && topIds.has(edge.target)))
   const positions = new Map(laidOut.map(node => [node.id, node.position]))
-  nodes.value = (nodes.value as any[]).map(node => node.parentNode ? node : { ...node, position: positions.get(node.id) || node.position }) as Node[]
+  nodes.value = laidOutNodes.map(node => node.parentNode ? node : { ...node, position: positions.get(node.id) || node.position }) as Node[]
   setTimeout(() => fitView({ padding: 0.2 }), 50)
 }
 function validConnection(connection: Connection) { return isConnectionAllowed(nodes.value as any[], currentCanvasEdges() as any[], connection) }
@@ -931,13 +951,14 @@ async function add(type: string, configOverride: Record<string, any> = {}) {
   const edgeSource = insertionEdge ? (nodes.value as any[]).find(node => node.id === insertionEdge.source) : null
   const edgeTarget = insertionEdge ? (nodes.value as any[]).find(node => node.id === insertionEdge.target) : null
   const parentId = paletteParentId.value || source?.parentNode || (edgeSource?.parentNode && edgeSource.parentNode === edgeTarget?.parentNode ? edgeSource.parentNode : null)
-  const siblingCount = parentId ? (nodes.value as any[]).filter(item => item.parentNode === parentId).length : 0
   const requestedPosition = parentId
-    ? { x: 230, y: 84 + siblingCount * 112 }
+    ? nextContainerChildPosition(nodes.value as any[], parentId)
     : insertionEdge && edgeSource && edgeTarget
     ? { x: (edgeSource.position.x + edgeTarget.position.x) / 2, y: (edgeSource.position.y + edgeTarget.position.y) / 2 }
     : source ? { x: source.position.x + (['iteration', 'loop'].includes(String(source.data?.nodeType || source.type)) ? 580 : 270), y: source.position.y } : { x: 300 + Math.random() * 180, y: 140 + Math.random() * 240 }
   const position = insertionEdge
+    ? requestedPosition
+    : parentId
     ? requestedPosition
     : findAvailableNodePosition(nodes.value as any[], requestedPosition, { parentNode: parentId, ignoreIds: source ? [source.id] : [] })
   const isContainer = ['iteration', 'loop'].includes(type)
@@ -970,7 +991,12 @@ async function add(type: string, configOverride: Record<string, any> = {}) {
   paletteReplaceNodeId.value = null
   pendingSourceConnection = null
   await nextTick()
-  setTimeout(focusSelected, 120)
+  if (parentId) resizeContainerToChildren(parentId)
+  setTimeout(() => {
+    if (parentId) resizeContainerToChildren(parentId)
+    selectOnlyCanvasNode(node.id)
+    focusSelected()
+  }, 120)
   return node
 }
 async function addScriptSnippet(script: any) {
@@ -1020,6 +1046,13 @@ function toggleCommentMode() {
   selectedCommentId.value = null
   interactionMode.value = 'pointer'
   paletteOpen.value = false; nodeContextMenu.value = null
+}
+function toggleCommentsPanel() {
+  if (showComments.value || commentMode.value) {
+    closeComments()
+    return
+  }
+  toggleCommentMode()
 }
 function createCommentAt(position: { x: number; y: number }) {
   const now = new Date().toISOString()
@@ -1117,11 +1150,22 @@ function handleEdgeDelete(event: Event) {
   if (!edgeId) return
   commitEdges(removeWorkflowEdgeById(currentCanvasEdges(), edgeId))
 }
+function resizeContainerToChildren(parentId: string) {
+  const size = containerSizeForChildren(nodes.value as any[], parentId)
+  nodes.value = (nodes.value as any[]).map(node => node.id === parentId
+    ? { ...node, style: { ...(node.style || {}), width: `${size.width}px`, height: `${size.height}px` } }
+    : node) as Node[]
+}
+function handleNodeDragStop(payload: { node: Node }) {
+  const parentId = String((payload.node as any)?.parentNode || '')
+  if (parentId) nextTick(() => resizeContainerToChildren(parentId))
+}
 function focusSelected() {
   if (!selected.value) return
   const width = Number((selected.value as any).dimensions?.width || 206)
   const height = Number((selected.value as any).dimensions?.height || 90)
-  setCenter(selected.value.position.x + width / 2, selected.value.position.y + height / 2, {
+  const position = absoluteNodePosition(nodes.value as any[], selected.value.id)
+  setCenter(position.x + width / 2, position.y + height / 2, {
     zoom: Math.min(1.1, Math.max(0.8, viewport.value.zoom)),
     duration: 300,
   })
@@ -1323,7 +1367,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.
             <span v-if="workflow?.published_version_id" class="muted whitespace-nowrap text-xs">· {{ t('studio.published') }}</span>
           </div>
           <button v-if="runtimeRunId" class="ml-3 flex h-7 items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300" :title="t('designer.clearRunOverlay')" @click="clearRunOverlay"><Activity :size="12" />{{ t('designer.runOverlay') }} · {{ runtimeRunId.slice(0, 8) }}<X :size="11" /></button>
-          <div class="ml-auto flex items-center gap-2">
+          <div class="designer-header-actions ml-auto flex items-center gap-2">
             <Button variant="secondary" :loading="running && !runTargetNodeId" @click="openRunDialog()"><Play :size="14" />{{ t('workflow.run') }}<kbd class="ml-1 rounded border border-[var(--border)] bg-[var(--panel-subtle)] px-1 py-0.5 text-[9px] font-normal text-[var(--muted)]">Alt R</kbd></Button>
             <div class="relative"><button class="icon-button surface" :title="t('designer.runHistory')" :aria-label="t('designer.runHistory')" @click="showRunHistory ? showRunHistory = false : openRunHistory()"><Activity :size="16" /></button><RunHistoryPopover :open="showRunHistory" :runs="runs" @close="showRunHistory = false" @refresh="loadRuns" @replay="replayRun" /></div>
           <button class="icon-button surface relative" :title="t('designer.pendingApprovals')" :aria-label="t('designer.pendingApprovals')" @click="openApprovals()"><UserCheck :size="16" /><span v-if="pendingApprovals.length" class="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[8px] font-bold text-white">{{ pendingApprovals.length }}</span></button>
@@ -1339,7 +1383,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.
             </div>
           </div>
           <div class="relative">
-            <button class="surface flex h-8 items-center justify-center rounded-lg px-2 font-mono text-[9px] font-bold" :class="showEnvironment && 'border-[var(--primary)] text-[var(--primary)]'" :title="t('designer.environmentVariables')" :aria-label="t('designer.environmentVariables')" @click="toggleEnvironment">ENV</button>
+            <button class="header-env-button surface flex items-center justify-center rounded-lg px-2 font-mono text-[9px] font-bold" :class="showEnvironment && 'border-[var(--primary)] text-[var(--primary)]'" :title="t('designer.environmentVariables')" :aria-label="t('designer.environmentVariables')" @click="toggleEnvironment">ENV</button>
             <WorkflowEnvironmentPanel v-if="showEnvironment" ref="environmentPanel" :variables="environmentVariables" :saving="environmentSaving" :error="environmentError" @close="showEnvironment = false" @create="createEnvironmentVariable" @update="updateEnvironmentVariable" @delete="deleteEnvironmentVariable" />
           </div>
           <div class="relative">
@@ -1357,12 +1401,12 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.
 
       <div v-if="activeSection === 'orchestration'" class="flex min-h-0 flex-1">
         <section ref="canvasHost" class="relative min-w-0 flex-1" @click.capture="handleCanvasBackgroundClick" @mousedown="handleCanvasMouseDown" @auxclick="handleCanvasAuxClick">
-          <VueFlow v-if="loaded" v-model:nodes="nodes" v-model:edges="edges" :node-types="nodeTypes" :edge-types="edgeTypes" :default-edge-options="{ type: 'workflow' }" :is-valid-connection="validConnection" :pan-on-drag="interactionMode === 'hand' || replayMode ? [0, 1] : [1]" :selection-on-drag="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :nodes-draggable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :nodes-connectable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :elements-selectable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" fit-view-on-init class="workflow-canvas" :class="{ 'replay-mode': replayMode, 'annotation-mode': annotationMode || commentMode, 'middle-panning': middlePanning }" @node-click="event => { nodeContextMenu = null; if (!replayMode && !annotationMode && !commentMode) selectNode(event) }" @node-context-menu="openNodeContextMenu" @edge-click="clearNodeSelection" @pane-click="handlePaneClick">
+          <VueFlow v-if="loaded" v-model:nodes="nodes" v-model:edges="edges" :node-types="nodeTypes" :edge-types="edgeTypes" :default-edge-options="{ type: 'workflow' }" :is-valid-connection="validConnection" :pan-on-drag="interactionMode === 'hand' || replayMode ? [0, 1] : [1]" :selection-on-drag="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :nodes-draggable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :nodes-connectable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :elements-selectable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" fit-view-on-init class="workflow-canvas" :class="{ 'replay-mode': replayMode, 'annotation-mode': annotationMode || commentMode, 'middle-panning': middlePanning }" @node-click="event => { nodeContextMenu = null; if (!replayMode && !annotationMode && !commentMode) selectNode(event) }" @node-context-menu="openNodeContextMenu" @node-drag-stop="handleNodeDragStop" @edge-click="clearNodeSelection" @pane-click="handlePaneClick">
             <Background :gap="18" :size="1" pattern-color="var(--border)" />
             <MiniMap pannable zoomable position="bottom-right" />
           </VueFlow>
-          <div v-for="entry in visibleCommentPins" :key="entry.comment.id" class="absolute z-[16] -translate-x-1/2 -translate-y-1/2" :style="commentPinStyle(entry.comment)">
-            <WorkflowCommentPin :index="entry.index" :selected="selectedCommentId === entry.comment.id" :resolved="entry.comment.resolved" :label="t('designer.commentPinLabel', { index: entry.index })" @select="selectComment(entry.comment.id)" />
+          <div v-for="entry in visibleCommentPins" :key="entry.comment.id" class="absolute z-10 -translate-x-1/2 -translate-y-1/2" :style="commentPinStyle(entry.comment)">
+            <WorkflowCommentPin :count="entry.count" :selected="selectedCommentId === entry.comment.id" :resolved="entry.comment.resolved" :label="t('designer.commentPinLabel', { index: entry.index })" @select="selectComment(entry.comment.id)" />
           </div>
           <div v-if="nodeContextMenu" class="absolute z-30" :style="{ left: `${nodeContextMenu.x}px`, top: `${nodeContextMenu.y}px` }" @click.stop>
             <NodeActionMenu :protected-node="contextMenuProtected" :can-change="contextMenuCanChange" @action="runNodeAction(nodeContextMenu.nodeId, $event)" />
@@ -1384,7 +1428,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.
             @add-node="openPalette"
             @toggle-annotation="toggleAnnotationMode"
             @fit-view="fitView({ padding: 0.2 })"
-            @toggle-comments="toggleCommentMode"
+            @toggle-comments="toggleCommentsPanel"
             @auto-layout="autoLayout"
             @copy="copySelection"
             @paste="pasteSelection"
@@ -1487,6 +1531,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.
                 <HumanConfigPanel v-else-if="selectedType === 'human'" :config="selected.data.config" :variable-groups="variableGroups" @remove="removeHumanAction" @connect="openPaletteForSource(selected.id, $event)" />
                 <IterationConfigPanel v-else-if="selectedType === 'iteration'" :config="selected.data.config" :variable-groups="variableGroups" />
                 <LoopConfigPanel v-else-if="selectedType === 'loop'" :config="selected.data.config" :variable-groups="variableGroups" />
+                <WaitConfigPanel v-else-if="selectedType === 'wait'" :config="selected.data.config" />
                 <SubworkflowConfigPanel v-else-if="selectedType === 'subworkflow'" :config="selected.data.config" :workflows="subworkflows" :variable-groups="variableGroups" @select="selectSubworkflow" />
                 <section v-else-if="selectedType === 'delay'" class="mt-5"><label class="field-label">{{ t('designer.delaySeconds') }}<InputText v-model.number="selected.data.config.seconds" class="mt-1.5" type="number" min="1" max="86400" /></label></section>
                 <DocumentConfigPanel v-else-if="selectedType === 'document'" :config="selected.data.config" :variable-groups="variableGroups" />
@@ -1522,10 +1567,14 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.
 
 <style>
 .workflow-canvas .vue-flow__minimap { right: 14px !important; bottom: 58px !important; width: 170px !important; height: 105px !important; }
+.workflow-canvas .vue-flow__edges { z-index: 6 !important; }
+.workflow-canvas .vue-flow__nodes { z-index: 3 !important; }
+.workflow-canvas .vue-flow__edge-labels { z-index: 5 !important; }
 .workflow-canvas.replay-mode .vue-flow__node { pointer-events: none; }
 .workflow-canvas.annotation-mode .vue-flow__pane { cursor: crosshair; }
 .workflow-canvas.middle-panning .vue-flow__pane, .workflow-canvas.middle-panning .vue-flow__node { cursor: grabbing !important; }
 .designer-sidebar { letter-spacing: 0; }.icon-button { display: inline-flex; width: 30px; height: 30px; flex: none; align-items: center; justify-content: center; border-radius: 7px; color: var(--muted); }.icon-button:hover { background: var(--panel-subtle); color: var(--text); }.side-nav { display: flex; width: 100%; height: 36px; align-items: center; gap: 10px; border-radius: 7px; padding: 0 10px; color: var(--muted); font-size: 13px; }.side-nav:hover { background: var(--panel-subtle); color: var(--text); }.side-nav.active { background: var(--primary-soft); color: var(--primary); font-weight: 600; }.workflow-canvas { background: var(--app-bg); }.workflow-canvas .vue-flow__node { border: 0; background: transparent; padding: 0; box-shadow: none; }.workflow-canvas .vue-flow__handle { width: 9px; height: 9px; border: 2px solid var(--panel); background: var(--primary); }.workflow-canvas .vue-flow__handle.quick-add-handle { width: 20px; height: 20px; border: 0; background: transparent; }.workflow-canvas .vue-flow__edge-path { stroke: #98a2b3; stroke-width: 1.5; }.canvas-mode-button { display: flex; width: 36px; height: 36px; align-items: center; justify-content: center; color: var(--muted); }.canvas-mode-button:hover { background: var(--panel-subtle); color: var(--text); }.canvas-mode-button.active { background: var(--primary-soft); color: var(--primary); }.canvas-action-row { display: flex; width: 100%; height: 32px; align-items: center; gap: 8px; border-radius: 6px; padding: 0 9px; font-size: 12px; }.canvas-action-row:hover:not(:disabled) { background: var(--panel-subtle); }.canvas-action-row:disabled { cursor: not-allowed; opacity: .4; }.inspector-tab { height: 40px; border-bottom: 2px solid transparent; padding: 0 12px; color: var(--muted); font-size: 12px; }.inspector-tab.active { border-color: var(--primary); color: var(--primary); font-weight: 600; }.field-label { display: block; color: var(--text); font-size: 12px; font-weight: 600; }.vue-flow__minimap { overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.designer-header-actions .icon-button { width: 36px; height: 36px; }.designer-header-actions .header-env-button { height: 36px; }.designer-header-actions button { transition: background-color .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease, transform .15s ease; }.designer-header-actions button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 3px 10px rgb(16 24 40 / 12%); }.designer-header-actions .header-env-button:hover { border-color: color-mix(in srgb, var(--primary), var(--border) 55%); background: var(--panel-subtle); color: var(--text); }
 .resource-empty { border: 1px dashed var(--border); border-radius: 7px; background: var(--panel-subtle); padding: 10px; color: var(--muted); font-size: 11px; }.field-error { margin-top: 6px; color: #d92d20; font-size: 11px; }
 .canvas-history-button { display: flex; width: 34px; height: 34px; align-items: center; justify-content: center; color: var(--muted); }.canvas-history-button:hover:not(:disabled) { background: var(--panel-subtle); color: var(--primary); }.canvas-history-button:disabled { cursor: not-allowed; opacity: .35; }
 .run-detail-heading { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }.run-detail-code { margin-top: 8px; max-height: 260px; overflow: auto; white-space: pre-wrap; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-subtle); padding: 12px; font-size: 11px; line-height: 1.6; }
