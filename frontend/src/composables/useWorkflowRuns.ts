@@ -126,7 +126,7 @@ export function useWorkflowRuns(options: WorkflowRunOptions) {
           if (event.type === 'token') {
             streamedText += String(event.delta || '')
             result.value = { ...result.value, status: 'running', outputs: { text: streamedText } }
-          } else if (event.status) {
+          } else if (event.status && ['run_started', 'run_finished'].includes(String(event.type))) {
             result.value = { ...result.value, status: event.status }
           }
         })

@@ -5,7 +5,7 @@ import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { Background } from '@vue-flow/background'
 import { VueFlow, useVueFlow, type Connection, type Edge, type Node, type NodeMouseEvent } from '@vue-flow/core'
 import { MiniMap } from '@vue-flow/minimap'
-import { Activity, AlertTriangle, ArrowLeft, Bot, Braces, BrainCircuit, Check, ChevronRight, CircleStop, Code2, Combine, Copy, FileText, GitBranch, GitMerge, Globe2, History, ListChecks, ListFilter, ListTree, MousePointer2, Play, Plus, RefreshCw, Repeat2, Rocket, Save, ScanText, Search, Timer, UserCheck, Workflow, X } from 'lucide-vue-next'
+import { Activity, AlertTriangle, ArrowLeft, Bot, Braces, BrainCircuit, Check, ChevronRight, CircleStop, Code2, Combine, Copy, FileText, GitBranch, GitMerge, Globe2, History, Images, ListChecks, ListFilter, ListTree, MousePointer2, Play, Plus, RefreshCw, Repeat2, Rocket, Save, ScanText, Search, Timer, UserCheck, Workflow, X } from 'lucide-vue-next'
 import api from '@/api/client'
 import { messages } from '@/i18n'
 import VariableField from '@/components/VariableField.vue'
@@ -68,6 +68,7 @@ const ListOperatorConfigPanel = defineAsyncComponent(() => import('@/components/
 const LoopConfigPanel = defineAsyncComponent(() => import('@/components/designer/LoopConfigPanel.vue'))
 const WaitConfigPanel = defineAsyncComponent(() => import('@/components/designer/WaitConfigPanel.vue'))
 const LlmConfigPanel = defineAsyncComponent(() => import('@/components/designer/LlmConfigPanel.vue'))
+const ImageGenerationConfigPanel = defineAsyncComponent(() => import('@/components/designer/ImageGenerationConfigPanel.vue'))
 const ParameterExtractorConfigPanel = defineAsyncComponent(() => import('@/components/designer/ParameterExtractorConfigPanel.vue'))
 const ScriptConfigPanel = defineAsyncComponent(() => import('@/components/designer/ScriptConfigPanel.vue'))
 const SubworkflowConfigPanel = defineAsyncComponent(() => import('@/components/designer/SubworkflowConfigPanel.vue'))
@@ -154,12 +155,12 @@ const saveState = computed<'idle' | 'dirty' | 'saving' | 'saved' | 'error' | 'co
   return lastSavedAt.value ? 'saved' : 'idle'
 })
 const localHistoryEntries = computed(() => graphHistory.value.map((state, index) => ({ state, index, time: historyTimes.value[index] })).reverse())
-const nodeTypes = { ...Object.fromEntries(['start', 'end', 'default', 'llm', 'agent', 'classifier', 'code', 'script', 'template', 'variable', 'json', 'aggregate', 'extract', 'list', 'http', 'condition', 'human', 'wait', 'delay', 'subworkflow', 'document'].map(type => [type, markRaw(WorkflowNode)])), iteration: markRaw(WorkflowContainerNode), loop: markRaw(WorkflowContainerNode), note: markRaw(WorkflowNoteNode) }
+const nodeTypes = { ...Object.fromEntries(['start', 'end', 'default', 'llm', 'image', 'agent', 'classifier', 'code', 'script', 'template', 'variable', 'json', 'aggregate', 'extract', 'list', 'http', 'condition', 'human', 'wait', 'delay', 'subworkflow', 'document'].map(type => [type, markRaw(WorkflowNode)])), iteration: markRaw(WorkflowContainerNode), loop: markRaw(WorkflowContainerNode), note: markRaw(WorkflowNoteNode) }
 const edgeTypes = { workflow: markRaw(WorkflowEdge) }
 const paletteSections = computed(() => {
   const query = paletteQuery.value.trim().toLocaleLowerCase()
   const sections = [
-    { key: 'ai', items: [{ type: 'agent', icon: BrainCircuit }, { type: 'llm', icon: Bot }, { type: 'end', icon: CircleStop }, { type: 'classifier', icon: ListFilter }] },
+    { key: 'ai', items: [{ type: 'agent', icon: BrainCircuit }, { type: 'llm', icon: Bot }, { type: 'image', icon: Images }, { type: 'end', icon: CircleStop }, { type: 'classifier', icon: ListFilter }] },
     { key: 'data', items: [{ type: 'template', icon: FileText }, { type: 'variable', icon: ListTree }, { type: 'json', icon: Code2 }, { type: 'aggregate', icon: Combine }, { type: 'extract', icon: ScanText }, { type: 'list', icon: ListFilter }] },
     { key: 'tools', items: [{ type: 'code', icon: Code2 }, { type: 'script', icon: Braces }, { type: 'http', icon: Globe2 }] },
     { key: 'logic', items: [{ type: 'condition', icon: GitBranch }, { type: 'wait', icon: GitMerge }, { type: 'human', icon: UserCheck }, { type: 'iteration', icon: Repeat2 }, { type: 'loop', icon: RefreshCw }, { type: 'subworkflow', icon: Workflow }, { type: 'delay', icon: Timer }] },
@@ -1301,6 +1302,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
               </template>
               <template v-else>
                 <LlmConfigPanel v-if="selectedType === 'llm'" :config="selected.data.config" :providers="modelProviders" :variable-groups="variableGroups" :buffers="configBuffers" :errors="configFieldErrors" @structured="updateStructuredField($event.field, $event.buffer as any)" @editing="configEditing = $event" />
+                <ImageGenerationConfigPanel v-else-if="selectedType === 'image'" :config="selected.data.config" :providers="modelProviders" :variable-groups="variableGroups" />
                 <AgentConfigPanel v-else-if="selectedType === 'agent'" :config="selected.data.config" :providers="modelProviders" :scripts="scripts" :variable-groups="variableGroups" @provider-change="selectModelProvider" />
                 <ClassifierConfigPanel v-else-if="selectedType === 'classifier'" :config="selected.data.config" :variable-groups="variableGroups" @add="addClassifierCategory" @remove="removeClassifierCategory" @connect="openPaletteForSource(selected.id, $event)" @update-keywords="updateClassifierKeywords" />
                 <CodeConfigPanel v-else-if="selectedType === 'code'" :key="selected.id" :config="selected.data.config" :variable-groups="variableGroups" @editing="configEditing = $event" />

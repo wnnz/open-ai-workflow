@@ -23,6 +23,7 @@ export function getNodeOutputVariables(node: WorkflowNodeLike): WorkflowVariable
   const prefix = nodeReferenceName(node) || node.id
   const fixed: Record<string, Array<[string, string]>> = {
     llm: [['text', 'String']],
+    image: [['images', 'Array[File]'], ['count', 'Number'], ['size', 'String'], ['model', 'String']],
     agent: [['text', 'String'], ['tool_calls', 'Array']],
     classifier: [['class_id', 'String'], ['class_name', 'String'], ['confidence', 'Number'], ['fallback', 'Boolean']],
     script: [['output', 'Object'], ['files', 'Array[File]']],

@@ -1,5 +1,5 @@
 export const executionPolicyNodeTypes = new Set([
-  'llm', 'agent', 'code', 'script', 'template', 'variable', 'json', 'aggregate',
+  'llm', 'image', 'agent', 'code', 'script', 'template', 'variable', 'json', 'aggregate',
   'extract', 'list', 'http', 'iteration', 'loop', 'delay', 'subworkflow',
 ])
 
@@ -20,6 +20,7 @@ export function useDesignerNodeConfig(t: Translate) {
     const defaults: Record<string, any> = {
       end: { outputs: [{ name: 'result', type: 'Any', value: '' }] },
       llm: { provider_id: '', model: '', temperature: 0.7, top_p: 1, max_tokens: 1024, messages: [{ role: 'system', content: '' }, { role: 'user', content: '{{inputs.message}}' }], prompt: '', context: '', vision: { enabled: false, variable: '', detail: 'high' }, reasoning: { separate: false }, response_format: 'text', response_schema: { type: 'object', properties: {} } },
+      image: { provider_id: '', model: 'gpt-image-2', prompt: '{{inputs.prompt}}', size: '{{inputs.resolution}}', count: '{{inputs.count}}', quality: 'high', output_format: 'webp', output_compression: 80, background: 'auto', timeout_seconds: 600 },
       agent: { provider_id: '', model: '', strategy: 'tool_calling', instructions: '', query: '{{inputs.message}}', tools: [], max_iterations: 5, memory: { enabled: false, window: 10 }, return_intermediate_steps: false },
       classifier: { input: '{{inputs.message}}', categories: [createClassifierCategory(), createClassifierCategory()] },
       code: { inputs: [{ name: 'message', type: 'String', value: '{{inputs.message}}' }], source: 'def main(inputs, context):\n    message = inputs.get("message", "")\n    return {"result": message}', entrypoint: 'main', outputs: [{ name: 'result', type: 'String' }], timeout_seconds: 30, memory_mb: 256, network_enabled: false },

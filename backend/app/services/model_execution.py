@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 import socket
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from time import sleep
 from typing import Any
 from urllib.parse import urlsplit
@@ -12,6 +14,11 @@ import httpx
 from fastapi import HTTPException, status
 
 from app.services.model_providers import provider_headers
+
+IMAGE_CONTENT_TYPES = {"png": "image/png", "jpeg": "image/jpeg", "jpg": "image/jpeg", "webp": "image/webp"}
+MAX_IMAGE_COUNT = 10
+MAX_IMAGE_DATA_URL_CHARS = 16_000_000
+MAX_IMAGE_RESULT_CHARS = 50_000_000
 
 
 def ensure_safe_runtime_destination(runtime: dict[str, Any]) -> None:
@@ -379,6 +386,75 @@ def execute_llm(runtime: dict[str, Any], config: dict[str, Any]) -> dict[str, An
         except json.JSONDecodeError as exc:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Model returned invalid JSON") from exc
     return output
+
+
+def execute_image_generation(runtime: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    model = str(config.get("model") or runtime.get("default_model", "")).strip()
+    prompt = str(config.get("prompt", "")).strip()
+    size = str(config.get("size", "")).strip()
+    size_match = re.search(r"(\d{3,5})\s*[x×]\s*(\d{3,5})", size, re.IGNORECASE)
+    if size_match:
+        size = f"{size_match.group(1)}x{size_match.group(2)}"
+    output_format = str(config.get("output_format", "webp")).lower()
+    try:
+        count = int(config.get("count", 1))
+        compression = int(config.get("output_compression", 80))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid image generation parameters") from exc
+    if not model or not prompt or not size:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Image model, prompt, and size are required")
+    if not 1 <= count <= MAX_IMAGE_COUNT:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Image count must be between 1 and 10")
+    if output_format not in IMAGE_CONTENT_TYPES or not 0 <= compression <= 100:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid image output settings")
+
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "n": 1,
+        "size": size,
+        "quality": str(config.get("quality", "high")),
+        "output_format": output_format,
+        "output_compression": compression,
+        "background": str(config.get("background", "auto")),
+    }
+    image_runtime = {
+        **runtime,
+        "config": {
+            **runtime.get("config", {}),
+            "timeout_seconds": float(config.get("timeout_seconds", 600)),
+        },
+    }
+
+    def generate_one(_: int) -> tuple[str, str]:
+        result = provider_request(image_runtime, "/images/generations", payload)
+        data = result.get("data")
+        if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Image provider returned no image")
+        item = data[0]
+        image = item.get("url")
+        if not isinstance(image, str) or not image:
+            encoded = item.get("b64_json")
+            if not isinstance(encoded, str) or not encoded:
+                raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Image provider returned an unsupported image result")
+            image = f"data:{IMAGE_CONTENT_TYPES[output_format]};base64,{encoded}"
+        if len(image) > MAX_IMAGE_DATA_URL_CHARS:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Generated image exceeds the per-image size limit")
+        return image, str(item.get("revised_prompt") or "")
+
+    with ThreadPoolExecutor(max_workers=count, thread_name_prefix="image-generation") as executor:
+        generated = list(executor.map(generate_one, range(count)))
+    images = [item[0] for item in generated]
+    if sum(map(len, images)) > MAX_IMAGE_RESULT_CHARS:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Generated images exceed the workflow result size limit")
+    revised_prompts = [item[1] for item in generated if item[1]]
+    return {
+        "images": images,
+        "count": len(images),
+        "size": size,
+        "model": model,
+        **({"revised_prompts": revised_prompts} if revised_prompts else {}),
+    }
 
 
 def execute_agent(

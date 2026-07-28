@@ -25,7 +25,7 @@ export type WorkflowValidationIssue = {
   nodeId?: string
   params?: Record<string, string | number>
 }
-const executionPolicyNodeTypes = new Set(['llm', 'agent', 'code', 'script', 'template', 'variable', 'json', 'aggregate', 'extract', 'list', 'http', 'iteration', 'loop', 'delay', 'subworkflow', 'document'])
+const executionPolicyNodeTypes = new Set(['llm', 'image', 'agent', 'code', 'script', 'template', 'variable', 'json', 'aggregate', 'extract', 'list', 'http', 'iteration', 'loop', 'delay', 'subworkflow', 'document'])
 
 type MergeableWorkflowEdge = {
   id?: string
@@ -465,6 +465,12 @@ export function validateWorkflowGraph(
       if ((!messages.length || messages.some((message: any) => !['system', 'user', 'assistant'].includes(message?.role) || !String(message?.content || '').trim())) && !String(config.prompt || '').trim()) issues.push({ code: 'llmMessagesRequired', nodeId: node.id, params })
       if (Number(config.temperature) < 0 || Number(config.temperature) > 2 || Number(config.top_p) < 0 || Number(config.top_p) > 1 || Number(config.max_tokens) < 1 || Number(config.max_tokens) > 128000) issues.push({ code: 'llmParametersInvalid', nodeId: node.id, params })
       if (config.response_format === 'json_schema' && (!config.response_schema || typeof config.response_schema !== 'object' || Array.isArray(config.response_schema))) issues.push({ code: 'llmSchemaRequired', nodeId: node.id, params })
+    }
+    if (type === 'image') {
+      if (!String(config.provider_id || '').trim() || !String(config.model || '').trim()) issues.push({ code: 'imageModelRequired', nodeId: node.id, params })
+      if (!String(config.prompt || '').trim() || !String(config.size || '').trim()) issues.push({ code: 'imageInputsRequired', nodeId: node.id, params })
+      const variableCount = typeof config.count === 'string' && /\{\{[^{}]+\}\}/.test(config.count)
+      if ((!variableCount && (!Number.isInteger(Number(config.count)) || Number(config.count) < 1 || Number(config.count) > 10)) || !['auto','low','medium','high'].includes(config.quality || 'high') || !['webp','png','jpeg','jpg'].includes(config.output_format || 'webp') || Number(config.output_compression) < 0 || Number(config.output_compression) > 100 || Number(config.timeout_seconds ?? 600) < 30 || Number(config.timeout_seconds ?? 600) > 900) issues.push({ code: 'imageParametersInvalid', nodeId: node.id, params })
     }
     if (type === 'agent' && !String(config.model || '').trim()) issues.push({ code: 'agentModelRequired', nodeId: node.id, params })
     if (type === 'classifier') {

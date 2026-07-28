@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { AlertCircle, CheckCircle2, Clock3, Play, X } from 'lucide-vue-next'
 import AlertBanner from '@/components/ui/AlertBanner.vue'
 import WorkflowInputField from '@/components/WorkflowInputField.vue'
+import WorkflowOutputRenderer from '@/components/WorkflowOutputRenderer.vue'
 import Button from '@/volt/Button.vue'
 import RunTraceItem from './RunTraceItem.vue'
 
@@ -62,7 +63,7 @@ watch(() => props.result?.id, value => { if (value) activeTab.value = props.resu
         <div v-else-if="activeTab === 'result'">
           <div v-if="result" class="space-y-4">
             <div class="flex items-center gap-2 text-xs font-semibold" :class="statusTone"><CheckCircle2 v-if="result.status === 'succeeded'" :size="15" /><Clock3 v-else-if="result.status === 'waiting'" :size="15" /><AlertCircle v-else :size="15" />{{ result.status }}</div>
-            <pre class="overflow-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-4 text-[11px] leading-5 text-slate-100">{{ JSON.stringify(result.outputs || {}, null, 2) }}</pre>
+            <WorkflowOutputRenderer :output="result.outputs || {}" />
             <AlertBanner :message="result.error || error" tone="error" />
           </div>
           <div v-else class="muted py-16 text-center text-xs">{{ $t('designer.noRun') }}</div>

@@ -19,7 +19,12 @@ from jinja2 import StrictUndefined, TemplateError
 from jinja2.sandbox import SandboxedEnvironment
 
 from app.core.config import get_settings
-from app.services.model_execution import execute_agent, execute_extractor, execute_llm
+from app.services.model_execution import (
+    execute_agent,
+    execute_extractor,
+    execute_image_generation,
+    execute_llm,
+)
 from app.services.scripts import validate_inputs, validate_script
 from app.services.workflow_node_registry import execute_registered_node
 from app.services.workflow_values import (
@@ -29,7 +34,7 @@ from app.services.workflow_values import (
 
 VARIABLE = re.compile(r"\{\{\s*([^{}\r\n]+?)\s*\}\}")
 EXECUTION_POLICY_NODE_TYPES = {
-    "llm", "agent", "code", "script", "template", "variable", "json", "aggregate",
+    "llm", "image", "agent", "code", "script", "template", "variable", "json", "aggregate",
     "extract", "list", "http", "iteration", "loop",
     "delay", "subworkflow", "document",
 }
@@ -134,6 +139,8 @@ def validate_graph(graph: dict[str, Any]) -> None:
         validate_code_config(code_node.get("data", {}).get("config", {}))
     for llm_node in (node for node in nodes if node.get("type") == "llm"):
         validate_llm_config(llm_node.get("data", {}).get("config", {}))
+    for image_node in (node for node in nodes if node.get("type") == "image"):
+        validate_image_config(image_node.get("data", {}).get("config", {}))
     for http_node in (node for node in nodes if node.get("type") == "http"):
         validate_http_config(http_node.get("data", {}).get("config", {}))
     for document_node in (node for node in nodes if node.get("type") == "document"):
@@ -644,6 +651,32 @@ def validate_llm_config(config: dict[str, Any]) -> None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid LLM reasoning config")
 
 
+def validate_image_config(config: dict[str, Any]) -> None:
+    for field in ("provider_id", "model", "prompt", "size"):
+        if not isinstance(config.get(field), str) or not config[field].strip():
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Image {field} is required")
+    for field in ("count", "output_compression"):
+        value = config.get(field, 1 if field == "count" else 80)
+        if isinstance(value, str) and VARIABLE.search(value):
+            continue
+        try:
+            number = int(value)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Invalid image {field}") from exc
+        minimum, maximum = (1, 10) if field == "count" else (0, 100)
+        if not minimum <= number <= maximum:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Invalid image {field}")
+    if config.get("quality", "high") not in {"low", "medium", "high", "auto"}:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid image quality")
+    if config.get("output_format", "webp") not in {"png", "jpeg", "jpg", "webp"}:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid image output format")
+    if config.get("background", "auto") not in {"auto", "opaque", "transparent"}:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid image background")
+    timeout_seconds = config.get("timeout_seconds", 600)
+    if not isinstance(timeout_seconds, (int, float)) or not 30 <= timeout_seconds <= 900:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid image timeout")
+
+
 def validate_http_config(config: dict[str, Any]) -> None:
     method = str(config.get("method", "GET")).upper()
     if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
@@ -799,6 +832,7 @@ def lookup(context: dict[str, Any], path: str) -> Any:
 TRACE_INPUT_KEYS: dict[str, tuple[str, ...]] = {
     "end": ("outputs",),
     "llm": ("provider_id", "model", "messages", "prompt", "context", "vision", "response_format"),
+    "image": ("provider_id", "model", "prompt", "size", "count", "quality", "output_format", "timeout_seconds"),
     "agent": ("provider_id", "model", "query", "instructions", "tools", "memory"),
     "classifier": ("input", "categories"),
     "code": ("inputs",),
@@ -872,7 +906,7 @@ def build_node_trace_metadata(
     context: dict[str, Any],
 ) -> dict[str, Any]:
     node_type = str(node.get("type") or "")
-    executor = "sandbox" if node_type in {"code", "script"} else "network" if node_type == "http" else "model" if node_type in {"llm", "agent", "classifier", "extract"} else "document-worker" if node_type == "document" else "built-in"
+    executor = "sandbox" if node_type in {"code", "script"} else "network" if node_type == "http" else "model" if node_type in {"llm", "image", "agent", "classifier", "extract"} else "document-worker" if node_type == "document" else "built-in"
     environment = context.get("env", {})
     secrets = list(environment.values()) if isinstance(environment, dict) else []
     logs = output.get("_logs", []) if isinstance(output, dict) else []
@@ -1376,6 +1410,8 @@ def execute_node(node: dict[str, Any], context: dict[str, Any]) -> Any:
         return execute_script_runtime(runtime, script_inputs)
     if node_type == "llm":
         return execute_llm(require_model_runtime(config, context), config)
+    if node_type == "image":
+        return execute_image_generation(require_model_runtime(config, context), config)
     if node_type == "agent":
         raw_tools = {
             str(tool.get("id")): tool

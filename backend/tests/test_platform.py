@@ -1705,6 +1705,44 @@ def test_llm_node_executes_the_configured_provider(monkeypatch: pytest.MonkeyPat
     assert "runtime-secret" not in str(trace)
 
 
+def test_image_node_generates_multiple_images_with_provider_credentials(monkeypatch: pytest.MonkeyPatch):
+    import app.services.model_execution as model_execution
+
+    calls: list[dict] = []
+
+    def request(runtime: dict, path: str, payload: dict) -> dict:
+        calls.append(payload)
+        assert runtime["api_key"] == "runtime-secret"
+        assert path == "/images/generations"
+        return {"data": [{"b64_json": "UklGRg=="}]}
+
+    monkeypatch.setattr(model_execution, "provider_request", request)
+    graph = {
+        "nodes": [
+            {"id": "start", "type": "start", "data": {"label": "Start", "config": {"triggers": ["api"], "input_fields": []}}},
+            {"id": "generator", "type": "image", "data": {"label": "Generate", "config": {
+                "provider_id": "provider-1", "model": "gpt-image-2", "prompt": "{{inputs.prompt}}",
+                "size": "{{inputs.size}}", "count": "{{inputs.count}}", "quality": "high",
+                "output_format": "webp", "output_compression": 80, "background": "auto",
+            }}},
+            {"id": "end", "type": "end", "data": {"label": "End", "config": {
+                "outputs": [{"name": "images", "type": "Array", "value": "{{Generate.images}}"}],
+            }}},
+        ],
+        "edges": [{"source": "start", "target": "generator"}, {"source": "generator", "target": "end"}],
+    }
+    output, trace = execute_graph(
+        graph,
+        {"prompt": "A clean product photo", "size": "1440x2560", "count": 2},
+        model_providers={"provider-1": {"base_url": "https://example.com/v1", "api_key": "runtime-secret", "default_model": "gpt-image-2", "config": {}}},
+    )
+
+    assert len(calls) == 2
+    assert all(call["n"] == 1 and call["size"] == "1440x2560" for call in calls)
+    assert output == {"images": ["data:image/webp;base64,UklGRg==", "data:image/webp;base64,UklGRg=="]}
+    assert trace[1]["output"]["count"] == 2
+
+
 def test_human_approval_pauses_and_resumes_the_selected_branch(client: TestClient):
     session = register(client, "approval-owner@example.com", "Approval Owner")
     headers = auth(session)

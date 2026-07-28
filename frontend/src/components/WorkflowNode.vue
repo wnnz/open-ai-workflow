@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Handle, Position, type NodeProps } from '@vue-flow/core'
-import { AlertTriangle, Bot, Braces, BrainCircuit, CheckCircle2, CircleSlash, CircleStop, Code2, Combine, FileText, GitBranch, GitMerge, Globe2, ListFilter, ListTree, Play, Plus, RefreshCw, Repeat2, ScanText, Timer, UserCheck, Workflow, XCircle } from 'lucide-vue-next'
+import { AlertTriangle, Bot, Braces, BrainCircuit, CheckCircle2, CircleSlash, CircleStop, Code2, Combine, FileText, GitBranch, GitMerge, Globe2, Images, ListFilter, ListTree, Play, Plus, RefreshCw, Repeat2, ScanText, Timer, UserCheck, Workflow, XCircle } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import NodeActionMenu, { type NodeAction } from '@/components/designer/NodeActionMenu.vue'
 import NodeValidationBadge from '@/components/designer/NodeValidationBadge.vue'
@@ -41,6 +41,7 @@ const meta = computed(() => ({
   start: { icon: Play, tone: 'blue', detail: (props.data?.config?.triggers || ['form', 'api']).map((item: string) => t(`designer.triggerShort.${item}`)).join(' + ') },
   end: { icon: CircleStop, tone: 'slate', detail: Array.isArray(props.data?.config?.outputs) ? props.data.config.outputs.map((output: any) => output.name).filter(Boolean).join(' · ') || t('designer.nodeDetails.output') : t('designer.nodeDetails.output') },
   llm: { icon: Bot, tone: 'violet', detail: props.data?.config?.model || 'LLM' },
+  image: { icon: Images, tone: 'rose', detail: props.data?.config?.model || t('workflow.nodes.image') },
   agent: { icon: BrainCircuit, tone: 'violet', detail: props.data?.config?.model || t('workflow.nodes.agent') },
   classifier: { icon: ListFilter, tone: 'orange', detail: `${classifierCategories.value.length} ${t('designer.categories')}` },
   code: { icon: Code2, tone: 'emerald', detail: 'Python' },

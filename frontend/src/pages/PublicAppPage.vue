@@ -9,6 +9,7 @@ import InputText from '@/volt/InputText.vue'
 import AlertBanner from '@/components/ui/AlertBanner.vue'
 import FormField from '@/components/ui/FormField.vue'
 import WorkflowInputField from '@/components/WorkflowInputField.vue'
+import WorkflowOutputRenderer from '@/components/WorkflowOutputRenderer.vue'
 import { coerceWorkflowInputValues, createWorkflowInputValues } from '@/utils/workflowInputs'
 import { consumeRunEvents } from '@/api/runEvents'
 
@@ -57,7 +58,7 @@ async function run() {
       if (event.type === 'token') {
         streamedText += String(event.delta || '')
         result.value = { ...result.value, status: 'running', outputs: { text: streamedText } }
-      } else if (event.status) result.value = { ...result.value, status: event.status }
+      } else if (event.status && ['run_started', 'run_finished'].includes(String(event.type))) result.value = { ...result.value, status: event.status }
     }, headers())
     result.value = (await axios.get(`/v1/apps/${slug}/runs/${result.value.run_id}`, { headers: headers() })).data
   } catch (cause: any) { error.value = cause.response?.data?.detail || String(cause) }
@@ -78,7 +79,7 @@ onMounted(load)
         </div>
         <Button class="mt-6 w-full" type="submit" :loading="loading"><Play :size="16" />{{ t('publicApp.run') }}</Button>
         <AlertBanner :message="error" tone="error" />
-        <pre v-if="result" class="mt-4 max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-4 text-xs text-slate-100">{{ JSON.stringify(result.outputs, null, 2) }}</pre>
+        <WorkflowOutputRenderer v-if="result" class="mt-4" :output="result.outputs" />
       </form>
       <div v-else-if="app" class="surface rounded-xl p-8 text-center text-sm text-[var(--muted)]">{{ t('publicApp.formDisabled') }}</div>
       <AlertBanner :message="error" tone="error" />

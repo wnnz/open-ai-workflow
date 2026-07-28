@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Bot, Braces, BrainCircuit, CircleHelp, CircleStop, Code2, Combine, FileText, GitBranch, GitMerge, Globe2, ListFilter, ListTree, MoreHorizontal, Play, RefreshCw, Repeat2, ScanText, StickyNote, Timer, UserCheck, Workflow, X } from 'lucide-vue-next'
+import { Bot, Braces, BrainCircuit, CircleHelp, CircleStop, Code2, Combine, FileText, GitBranch, GitMerge, Globe2, Images, ListFilter, ListTree, MoreHorizontal, Play, RefreshCw, Repeat2, ScanText, StickyNote, Timer, UserCheck, Workflow, X } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import NodeActionMenu, { type NodeAction } from '@/components/designer/NodeActionMenu.vue'
 
@@ -15,7 +15,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const menuOpen = ref(false)
 const meta = computed(() => ({
-  start: { icon: Play, tone: 'blue' }, end: { icon: CircleStop, tone: 'slate' }, llm: { icon: Bot, tone: 'violet' }, agent: { icon: BrainCircuit, tone: 'violet' },
+  start: { icon: Play, tone: 'blue' }, end: { icon: CircleStop, tone: 'slate' }, llm: { icon: Bot, tone: 'violet' }, image: { icon: Images, tone: 'rose' }, agent: { icon: BrainCircuit, tone: 'violet' },
   classifier: { icon: ListFilter, tone: 'orange' }, code: { icon: Code2, tone: 'emerald' }, script: { icon: Braces, tone: 'emerald' }, template: { icon: FileText, tone: 'sky' },
   variable: { icon: ListTree, tone: 'indigo' }, json: { icon: Code2, tone: 'cyan' }, aggregate: { icon: Combine, tone: 'indigo' }, extract: { icon: ScanText, tone: 'cyan' },
   list: { icon: ListFilter, tone: 'sky' }, http: { icon: Globe2, tone: 'cyan' }, condition: { icon: GitBranch, tone: 'orange' },
