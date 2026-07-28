@@ -9,34 +9,16 @@ import { Activity, AlertTriangle, ArrowLeft, Bot, Braces, BrainCircuit, Check, C
 import api from '@/api/client'
 import { messages } from '@/i18n'
 import VariableField from '@/components/VariableField.vue'
-import AggregateConfigPanel from '@/components/designer/AggregateConfigPanel.vue'
-import AgentConfigPanel from '@/components/designer/AgentConfigPanel.vue'
 import AnnotationPlacementToolbar from '@/components/designer/AnnotationPlacementToolbar.vue'
-import ClassifierConfigPanel from '@/components/designer/ClassifierConfigPanel.vue'
-import ConditionConfigPanel from '@/components/designer/ConditionConfigPanel.vue'
 import DesignerCommandPalette from '@/components/designer/DesignerCommandPalette.vue'
-import DocumentConfigPanel from '@/components/designer/DocumentConfigPanel.vue'
-import ExecutionPolicyPanel from '@/components/designer/ExecutionPolicyPanel.vue'
-import HttpConfigPanel from '@/components/designer/HttpConfigPanel.vue'
-import HumanConfigPanel from '@/components/designer/HumanConfigPanel.vue'
-import JsonEditorField from '@/components/designer/JsonEditorField.vue'
-import ListOperatorConfigPanel from '@/components/designer/ListOperatorConfigPanel.vue'
-import LoopConfigPanel from '@/components/designer/LoopConfigPanel.vue'
-import WaitConfigPanel from '@/components/designer/WaitConfigPanel.vue'
-import LlmConfigPanel from '@/components/designer/LlmConfigPanel.vue'
 import NextStepPanel from '@/components/designer/NextStepPanel.vue'
 import NodeActionMenu, { type NodeAction } from '@/components/designer/NodeActionMenu.vue'
 import NodeOutputPanel from '@/components/designer/NodeOutputPanel.vue'
 import NodePalette from '@/components/designer/NodePalette.vue'
-import ParameterExtractorConfigPanel from '@/components/designer/ParameterExtractorConfigPanel.vue'
 import PublishPopover from '@/components/designer/PublishPopover.vue'
 import RunDebugPanel from '@/components/designer/RunDebugPanel.vue'
 import RunHistoryPopover from '@/components/designer/RunHistoryPopover.vue'
 import SelectionToolbar from '@/components/designer/SelectionToolbar.vue'
-import SubworkflowConfigPanel from '@/components/designer/SubworkflowConfigPanel.vue'
-import TemplateConfigPanel from '@/components/designer/TemplateConfigPanel.vue'
-import IterationConfigPanel from '@/components/designer/IterationConfigPanel.vue'
-import VariableAssignConfigPanel from '@/components/designer/VariableAssignConfigPanel.vue'
 import WorkflowCommentPin from '@/components/designer/WorkflowCommentPin.vue'
 import WorkflowCommentsPanel from '@/components/designer/WorkflowCommentsPanel.vue'
 import WorkflowCanvasControls from '@/components/designer/WorkflowCanvasControls.vue'
@@ -63,21 +45,40 @@ import InputText from '@/volt/InputText.vue'
 import Select from '@/volt/Select.vue'
 import Textarea from '@/volt/Textarea.vue'
 import { absoluteNodePosition, clearWorkflowEdgeSelection, containerSizeForChildren, findAvailableNodePosition, insertNodeOnEdge, isConnectionAllowed, layoutContainerChildren, layoutWorkflow, mergeWorkflowEdges, nextContainerChildPosition, removeWorkflowEdgeById, replaceWorkflowNode, validateWorkflowGraph, type WorkflowValidationIssue } from '@/utils/workflowGraph'
-import { coerceWorkflowInputValues, createWorkflowInputValues } from '@/utils/workflowInputs'
-import { buildRunOverlay, clearRunOverlay as clearGraphRunOverlay, stripRuntimeData } from '@/utils/workflowRunOverlay'
+import { stripRuntimeData } from '@/utils/workflowRunOverlay'
 import { allocateDefaultNodeName, ensureUniqueNodeNames, nextUniqueNodeName, nodeReferenceName, rewriteNodeReferences, validateNodeName, type NodeNameError, type NodeRename } from '@/utils/workflowNodeNames'
 import { buildAllVariableCatalog, buildVariableCatalog, readRuntimeVariable } from '@/utils/workflowVariables'
 import { normalizeWorkflowComments, type WorkflowCommentThread } from '@/types/workflowComments'
 import { SYSTEM_VARIABLES } from '@/types/workflowSystemVariables'
+import { executionPolicyNodeTypes, useDesignerNodeConfig } from '@/composables/useDesignerNodeConfig'
+import { useWorkflowRuns } from '@/composables/useWorkflowRuns'
 
 const { t } = useI18n()
+const { classifierBranchLabel, createClassifierCategory, defaultNodeConfig, normalizeClassifierConfig, normalizeConditionConfig, normalizeEndOutputs, normalizeExecutionPolicy, normalizeHumanConfig, normalizeLlmConfig, normalizeStartField } = useDesignerNodeConfig(t)
 const CodeConfigPanel = defineAsyncComponent(() => import('@/components/designer/CodeConfigPanel.vue'))
+const AggregateConfigPanel = defineAsyncComponent(() => import('@/components/designer/AggregateConfigPanel.vue'))
+const AgentConfigPanel = defineAsyncComponent(() => import('@/components/designer/AgentConfigPanel.vue'))
+const ClassifierConfigPanel = defineAsyncComponent(() => import('@/components/designer/ClassifierConfigPanel.vue'))
+const ConditionConfigPanel = defineAsyncComponent(() => import('@/components/designer/ConditionConfigPanel.vue'))
+const ExecutionPolicyPanel = defineAsyncComponent(() => import('@/components/designer/ExecutionPolicyPanel.vue'))
+const HttpConfigPanel = defineAsyncComponent(() => import('@/components/designer/HttpConfigPanel.vue'))
+const HumanConfigPanel = defineAsyncComponent(() => import('@/components/designer/HumanConfigPanel.vue'))
+const JsonEditorField = defineAsyncComponent(() => import('@/components/designer/JsonEditorField.vue'))
+const ListOperatorConfigPanel = defineAsyncComponent(() => import('@/components/designer/ListOperatorConfigPanel.vue'))
+const LoopConfigPanel = defineAsyncComponent(() => import('@/components/designer/LoopConfigPanel.vue'))
+const WaitConfigPanel = defineAsyncComponent(() => import('@/components/designer/WaitConfigPanel.vue'))
+const LlmConfigPanel = defineAsyncComponent(() => import('@/components/designer/LlmConfigPanel.vue'))
+const ParameterExtractorConfigPanel = defineAsyncComponent(() => import('@/components/designer/ParameterExtractorConfigPanel.vue'))
+const SubworkflowConfigPanel = defineAsyncComponent(() => import('@/components/designer/SubworkflowConfigPanel.vue'))
+const TemplateConfigPanel = defineAsyncComponent(() => import('@/components/designer/TemplateConfigPanel.vue'))
+const IterationConfigPanel = defineAsyncComponent(() => import('@/components/designer/IterationConfigPanel.vue'))
+const VariableAssignConfigPanel = defineAsyncComponent(() => import('@/components/designer/VariableAssignConfigPanel.vue'))
 const route = useRoute(); const router = useRouter()
 const auth = useAuthStore(); const preferences = usePreferencesStore(); const workspaces = useWorkspacesStore()
 const { addNodes, addSelectedNodes, fitView, getNodes, onConnect, removeSelectedNodes, screenToFlowCoordinate, setCenter, viewport, zoomIn, zoomOut } = useVueFlow()
 const workflow = ref<any>(null); const nodes = ref<Node[]>([]); const edges = ref<Edge[]>([])
-const selected = ref<Node | null>(null); const saving = ref(false); const running = ref(false); const publishing = ref(false)
-const result = ref<any>(null); const inspectorTab = ref<InspectorTab>('settings'); const paletteOpen = ref(false)
+const selected = ref<Node | null>(null); const saving = ref(false); const publishing = ref(false)
+const inspectorTab = ref<InspectorTab>('settings'); const paletteOpen = ref(false)
 const paletteSourceId = ref<string | null>(null)
 const paletteSourceHandle = ref<string | null>(null)
 const paletteEdgeId = ref<string | null>(null)
@@ -95,16 +96,11 @@ const comments = ref<WorkflowCommentThread[]>([])
 const canvasHost = ref<HTMLElement | null>(null); const nodeContextMenu = ref<{ nodeId: string; x: number; y: number } | null>(null)
 const loaded = ref(false); const saveError = ref(''); const saveConflict = ref(false); const lastSavedAt = ref<Date | null>(null)
 const dirty = ref(false); const editRevision = ref(0)
-const activeSection = ref<DesignerSection>('orchestration'); const versions = ref<any[]>([]); const runs = ref<any[]>([]); const showHistory = ref(false); const showHelp = ref(false)
+const activeSection = ref<DesignerSection>('orchestration'); const versions = ref<any[]>([]); const showHistory = ref(false); const showHelp = ref(false)
 const showChecklist = ref(false); const showChangeHistory = ref(false); const showPublish = ref(false); const pendingRestoreVersion = ref<any>(null); const restoringVersion = ref(false)
-const showRunDialog = ref(false); const runInputs = ref<Record<string, any>>({}); const runError = ref(''); const uploadingField = ref('')
-const sidebarCollapsed = ref(false); const showRunHistory = ref(false); const selectedRun = ref<any>(null)
+const sidebarCollapsed = ref(false)
 const expandedStartFieldIndex = ref<number | null>(null)
 const showVariableInspector = ref(false); const variableSearch = ref(''); const copiedVariablePath = ref('')
-const runTargetNodeId = ref<string | null>(null); const nodeResults = ref<Record<string, any>>({})
-const runtimeRunId = ref('')
-const replayMode = computed(() => Boolean(runtimeRunId.value && selectedRun.value))
-const approvals = ref<any[]>([]); const selectedApproval = ref<any>(null); const showApprovals = ref(false); const approvalComment = ref(''); const respondingApproval = ref(false)
 const modelProviders = ref<any[]>([]); const scripts = ref<any[]>([]); const subworkflows = ref<any[]>([])
 const environmentVariables = ref<WorkflowEnvironmentVariable[]>([]); const showEnvironment = ref(false); const environmentSaving = ref(false); const environmentError = ref('')
 const showSystemVariables = ref(false)
@@ -130,13 +126,8 @@ const filteredVariableGroups = computed(() => {
 })
 const startNode = computed<any>(() => (nodes.value as any[]).find(node => String(node.data?.nodeType || node.type) === 'start'))
 const startFields = computed<any[]>(() => startNode.value?.data?.config?.input_fields || [])
+const { approvalComment, approvals, clearRunOverlay, exitReplayMode, loadApprovals, loadRuns, nodeResults, openApprovals, openRunDialog, openRunHistory, pendingApprovals, replayMode, replayRun, respondingApproval, respondApproval, result, run, runError, runInputs, running, runNodeLabels, runs, runTargetLabel, runTargetNodeId, runtimeRunId, selectedApproval, selectedResult, selectedRun, showApprovals, showRunDialog, showRunHistory, uploadingField, uploadRunFile } = useWorkflowRuns({ workspaceId, workflowId, startFields, nodes, selected, inspectorTab, activeSection, currentEdges: currentCanvasEdges, commitEdges, fitView } as any)
 const selectedScript = computed<any>(() => scripts.value.find(item => item.id === selected.value?.data?.config?.script_id))
-const selectedResult = computed<any>(() => selected.value ? nodeResults.value[selected.value.id] : null)
-const runTargetLabel = computed(() => (nodes.value as any[]).find(node => node.id === runTargetNodeId.value)?.data?.label || '')
-const runNodeLabels = computed<Record<string, string>>(() => Object.fromEntries(
-  (nodes.value as any[]).map(node => [node.id, String(node.data?.label || node.id)]),
-))
-const pendingApprovals = computed(() => approvals.value.filter(item => item.status === 'pending'))
 const nextNodes = computed<any[]>(() => {
   if (!selected.value) return []
   const targets = new Set((currentCanvasEdges() as any[]).filter(edge => edge.source === selected.value!.id).map(edge => edge.target))
@@ -170,7 +161,7 @@ const paletteSections = computed(() => {
   const sections = [
     { key: 'ai', items: [{ type: 'agent', icon: BrainCircuit }, { type: 'llm', icon: Bot }, { type: 'end', icon: CircleStop }, { type: 'classifier', icon: ListFilter }] },
     { key: 'data', items: [{ type: 'template', icon: FileText }, { type: 'variable', icon: ListTree }, { type: 'json', icon: Code2 }, { type: 'aggregate', icon: Combine }, { type: 'extract', icon: ScanText }, { type: 'list', icon: ListFilter }] },
-    { key: 'tools', items: [{ type: 'code', icon: Code2 }, { type: 'script', icon: Braces }, { type: 'http', icon: Globe2 }, { type: 'document', icon: FileText }] },
+    { key: 'tools', items: [{ type: 'code', icon: Code2 }, { type: 'script', icon: Braces }, { type: 'http', icon: Globe2 }] },
     { key: 'logic', items: [{ type: 'condition', icon: GitBranch }, { type: 'wait', icon: GitMerge }, { type: 'human', icon: UserCheck }, { type: 'iteration', icon: Repeat2 }, { type: 'loop', icon: RefreshCw }, { type: 'subworkflow', icon: Workflow }, { type: 'delay', icon: Timer }] },
   ]
   return sections.map(section => ({ ...section, items: section.items.filter(item => {
@@ -193,79 +184,6 @@ let selectionRestoreTimer: ReturnType<typeof setTimeout> | undefined
 let activeSave: Promise<boolean> | null = null
 let restoringHistory = false
 let pendingSourceConnection: { sourceId: string; sourceHandle?: string } | null = null
-const executionPolicyNodeTypes = new Set(['llm', 'agent', 'code', 'script', 'template', 'variable', 'json', 'aggregate', 'extract', 'list', 'http', 'iteration', 'loop', 'delay', 'subworkflow', 'document'])
-
-function defaultNodeConfig(type: string) {
-  const defaults: Record<string, any> = {
-    end: { outputs: [{ name: 'result', type: 'Any', value: '' }] },
-    llm: { provider_id: '', model: '', temperature: 0.7, top_p: 1, max_tokens: 1024, messages: [{ role: 'system', content: '' }, { role: 'user', content: '{{inputs.message}}' }], prompt: '', context: '', vision: { enabled: false, variable: '', detail: 'high' }, reasoning: { separate: false }, response_format: 'text', response_schema: { type: 'object', properties: {} } },
-    agent: { provider_id: '', model: '', strategy: 'tool_calling', instructions: '', query: '{{inputs.message}}', tools: [], max_iterations: 5, memory: { enabled: false, window: 10 }, return_intermediate_steps: false },
-    classifier: { input: '{{inputs.message}}', categories: [createClassifierCategory(), createClassifierCategory()] },
-    code: { inputs: [{ name: 'message', type: 'String', value: '{{inputs.message}}' }], source: 'def main(inputs, context):\n    message = inputs.get("message", "")\n    return {"result": message}', entrypoint: 'main', outputs: [{ name: 'result', type: 'String' }], timeout_seconds: 30, memory_mb: 256, network_enabled: false },
-    script: { script_id: '', version: 'latest', inputs: {} },
-    template: { inputs: [{ name: 'arg1', value: '' }], template: '' },
-    variable: { assignments: [] },
-    json: { value: {} },
-    aggregate: { variables: [''], group_enabled: false, groups: [] },
-    extract: { provider_id: '', model: '', source: '{{inputs.message}}', fields: [{ name: '', type: 'String', description: '', required: false }], instruction: '', vision: { enabled: false, variable: '' } },
-    list: { source: '', filter: { enabled: false, field: '', operator: 'equals', value: '' }, nth: { enabled: false, index: 1 }, limit: { enabled: false, count: 10 }, sort: { enabled: false, order: 'asc', key: '' }, unique: false },
-    http: { method: 'GET', url: '', timeout_seconds: 30, max_response_bytes: 2000000, follow_redirects: false, query: {}, headers: {}, auth: { type: 'none', token: '', username: '', password: '', key: '', value: '', location: 'header' }, body_type: 'json', body: {} },
-    condition: { logical_operator: 'and', conditions: [{ variable: '', operator: 'equals', value: '' }], expression: '' },
-    human: { submission_methods: ['studio'], form_content: '', actions: [{ id: 'approve', label: t('designer.approve'), value: 'approved', style: 'primary' }, { id: 'reject', label: t('designer.reject'), value: 'rejected', style: 'danger' }], timeout_minutes: 4320 },
-    iteration: { source: '', item_variable: 'item', output: '', mode: 'sequential', concurrency: 1 },
-    loop: { condition: '', max_iterations: 10, output: '' },
-    wait: { mode: 'all' },
-    delay: { seconds: 60 },
-    subworkflow: { workflow_id: '', inputs: {} },
-    document: { operation: 'extract', source: '{{inputs.file}}', extract_mode: 'text', page_range: '', ocr_fallback: true },
-  }
-  const value = structuredClone(defaults[type] || {})
-  if (executionPolicyNodeTypes.has(type)) Object.assign(value, {
-    retry: { enabled: false, max_retries: 3, interval_seconds: 0 },
-    error_strategy: 'fail',
-    default_output: {},
-  })
-  return value
-}
-
-function normalizeExecutionPolicy(type: string, config: any) {
-  if (!executionPolicyNodeTypes.has(type)) return config
-  return {
-    ...config,
-    retry: { enabled: false, max_retries: 3, interval_seconds: 0, ...(config?.retry || {}) },
-    error_strategy: config?.error_strategy || 'fail',
-    default_output: config?.default_output && typeof config.default_output === 'object' && !Array.isArray(config.default_output) ? config.default_output : {},
-  }
-}
-
-function createClassifierCategory(category: any = {}) {
-  return {
-    id: category.id || crypto.randomUUID().slice(0, 12),
-    name: '',
-    description: '',
-    keywords: [],
-    ...category,
-  }
-}
-
-function normalizeClassifierConfig(config: any) {
-  const normalized = { ...defaultNodeConfig('classifier'), ...(config || {}) }
-  const seen = new Set<string>()
-  normalized.categories = (Array.isArray(config?.categories) ? config.categories : normalized.categories).map((category: any) => {
-    const next = createClassifierCategory(category)
-    if (!next.id || seen.has(next.id)) next.id = crypto.randomUUID().slice(0, 12)
-    seen.add(next.id)
-    next.keywords = Array.isArray(next.keywords) ? next.keywords : String(next.keywords || '').split(',').map((item: string) => item.trim()).filter(Boolean)
-    return next
-  })
-  return normalized
-}
-
-function classifierBranchLabel(node: any, sourceHandle: string | null | undefined) {
-  if (!String(sourceHandle || '').startsWith('category:')) return ''
-  const categoryId = String(sourceHandle).slice('category:'.length)
-  return node?.data?.config?.categories?.find((category: any) => category.id === categoryId)?.name || ''
-}
 
 function syncClassifierEdgeLabels() {
   const nodeById = new Map((nodes.value as any[]).map(node => [node.id, node]))
@@ -274,52 +192,6 @@ function syncClassifierEdgeLabels() {
     if (!label || edge.data?.branchLabel === label) return edge
     return { ...edge, data: { ...(edge.data || {}), branchLabel: label } }
   }) as Edge[])
-}
-
-function normalizeEndOutputs(outputs: any, inputFields: any[]) {
-  if (Array.isArray(outputs)) return outputs.map(output => ({ type: 'Any', ...output }))
-  if (outputs && typeof outputs === 'object') {
-    return Object.entries(outputs).map(([name, value]) => ({ name, type: 'Any', value }))
-  }
-  if (typeof outputs === 'string' && /^\{\{\s*inputs\s*\}\}$/.test(outputs)) {
-    return inputFields.map(field => ({
-      name: field.name,
-      type: field.type === 'number' ? 'Number' : field.type === 'file' ? 'File' : field.type === 'files' ? 'Array' : 'String',
-      value: `{{inputs.${field.name}}}`,
-    }))
-  }
-  return [{ name: 'result', type: 'Any', value: outputs ?? '' }]
-}
-
-function normalizeStartField(field: any) {
-  return {
-    name: '', label: '', type: 'text', required: false, placeholder: '', default_value: '',
-    max_length: null, min: null, max: null, options: [], ...field,
-  }
-}
-
-function normalizeConditionConfig(config: any) {
-  const normalized = { ...defaultNodeConfig('condition'), ...(config || {}) }
-  if (Array.isArray(config?.conditions)) normalized.conditions = config.conditions
-  else if (String(config?.expression || '').trim()) normalized.conditions = []
-  return normalized
-}
-
-function normalizeLlmConfig(config: any) {
-  const normalized = { ...defaultNodeConfig('llm'), ...(config || {}) }
-  normalized.vision = { enabled: false, variable: '', detail: 'high', ...(config?.vision || {}) }
-  normalized.reasoning = { separate: false, ...(config?.reasoning || {}) }
-  if (Array.isArray(config?.messages) && config.messages.length) normalized.messages = config.messages
-  else if (String(config?.prompt || '').trim()) normalized.messages = [{ role: 'user', content: config.prompt }]
-  return normalized
-}
-
-function normalizeHumanConfig(config: any) {
-  const normalized = { ...defaultNodeConfig('human'), ...(config || {}) }
-  normalized.form_content = config?.form_content || config?.instructions || ''
-  normalized.submission_methods = Array.isArray(config?.submission_methods) && config.submission_methods.length ? config.submission_methods : ['studio']
-  normalized.actions = Array.isArray(config?.actions) && config.actions.length ? config.actions : defaultNodeConfig('human').actions
-  return normalized
 }
 
 function renameNodesAndReferences(currentNodes: any[], renames: NodeRename[]) {
@@ -582,94 +454,6 @@ async function publish(payload: { change_note: string; access: 'public' | 'prote
     await loadVersions()
   } catch (cause: any) { saveError.value = cause.response?.data?.detail || String(cause) }
   finally { publishing.value = false }
-}
-function openRunDialog(nodeId: string | null = null) {
-  runTargetNodeId.value = nodeId
-  runInputs.value = createWorkflowInputValues(startFields.value)
-  runError.value = ''; showRunDialog.value = true
-}
-async function uploadRunFile(field: any, event: Event) {
-  const input = event.target as HTMLInputElement; const files = Array.from(input.files || [])
-  if (!files.length) return
-  uploadingField.value = field.name; runError.value = ''
-  try {
-    const uploaded = []
-    for (const file of files) {
-      const form = new FormData(); form.append('file', file)
-      uploaded.push((await api.post(`/workspaces/${workspaceId.value}/workflows/${workflowId.value}/files`, form)).data)
-    }
-    runInputs.value[field.name] = field.type === 'files' ? uploaded : uploaded[0]
-  } catch (cause: any) { runError.value = cause.response?.data?.detail || String(cause) }
-  finally { uploadingField.value = '' }
-}
-async function run() {
-  running.value = true; runError.value = ''; result.value = null
-  clearRunOverlay()
-  try {
-    const inputs = coerceWorkflowInputValues(startFields.value, runInputs.value)
-    const path = runTargetNodeId.value
-      ? `/workspaces/${workspaceId.value}/workflows/${workflowId.value}/nodes/${runTargetNodeId.value}/run`
-      : `/workspaces/${workspaceId.value}/workflows/${workflowId.value}/run`
-    result.value = (await api.post(path, { inputs })).data
-    applyRunOverlay(result.value)
-    inspectorTab.value = 'run'; await loadRuns()
-    if (result.value.status === 'waiting') await openApprovals(result.value.id)
-  } catch (cause: any) { runError.value = cause.response?.data?.detail || String(cause) }
-  finally { running.value = false }
-}
-async function loadRuns() { runs.value = (await api.get(`/workspaces/${workspaceId.value}/workflows/${workflowId.value}/runs`)).data }
-async function loadApprovals() { approvals.value = (await api.get(`/workspaces/${workspaceId.value}/workflows/${workflowId.value}/approvals`)).data }
-async function openApprovals(runId = '') {
-  await loadApprovals()
-  selectedApproval.value = approvals.value.find(item => item.status === 'pending' && (!runId || item.run_id === runId)) || approvals.value[0] || null
-  approvalComment.value = ''
-  showApprovals.value = true
-}
-async function respondApproval(action: any) {
-  if (!selectedApproval.value || selectedApproval.value.status !== 'pending') return
-  respondingApproval.value = true; runError.value = ''
-  try {
-    const approval = selectedApproval.value
-    const { data } = await api.post(`/workspaces/${workspaceId.value}/workflows/${workflowId.value}/runs/${approval.run_id}/approvals/${approval.id}/respond`, { action_id: action.id, comment: approvalComment.value, data: {} })
-    result.value = data; applyRunOverlay(data); await Promise.all([loadRuns(), loadApprovals()])
-    selectedApproval.value = approvals.value.find(item => item.status === 'pending' && item.run_id === data.id) || approvals.value.find(item => item.id === approval.id) || null
-    if (data.status !== 'waiting') showApprovals.value = false
-  } catch (cause: any) { runError.value = cause.response?.data?.detail || String(cause) }
-  finally { respondingApproval.value = false }
-}
-async function openRunHistory() {
-  await loadRuns()
-  showRunHistory.value = true
-}
-function applyRunOverlay(runRecord: any) {
-  const overlay = buildRunOverlay(nodes.value as any[], currentCanvasEdges() as any[], runRecord)
-  nodes.value = overlay.nodes as Node[]
-  commitEdges(overlay.edges as Edge[])
-  nodeResults.value = overlay.nodeResults
-  runtimeRunId.value = overlay.runId
-}
-function clearRunOverlay() {
-  const cleared = clearGraphRunOverlay(nodes.value as any[], currentCanvasEdges() as any[])
-  nodes.value = cleared.nodes as Node[]
-  commitEdges(cleared.edges as Edge[])
-  nodeResults.value = {}
-  runtimeRunId.value = ''
-}
-function replayRun(runRecord: any) {
-  selectedRun.value = runRecord
-  result.value = runRecord
-  applyRunOverlay(runRecord)
-  showRunHistory.value = false
-  showRunDialog.value = true
-  runTargetNodeId.value = null
-  selected.value = null
-  activeSection.value = 'orchestration'
-  setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 0)
-}
-function exitReplayMode() {
-  clearRunOverlay()
-  selectedRun.value = null
-  showRunDialog.value = false
 }
 async function loadVersions() { versions.value = (await api.get(`/workspaces/${workspaceId.value}/workflows/${workflowId.value}/versions`)).data }
 async function openPublish() {
@@ -1546,7 +1330,6 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
                 <WaitConfigPanel v-else-if="selectedType === 'wait'" :config="selected.data.config" />
                 <SubworkflowConfigPanel v-else-if="selectedType === 'subworkflow'" :config="selected.data.config" :workflows="subworkflows" :variable-groups="variableGroups" @select="selectSubworkflow" />
                 <section v-else-if="selectedType === 'delay'" class="mt-5"><label class="field-label">{{ t('designer.delaySeconds') }}<InputText v-model.number="selected.data.config.seconds" class="mt-1.5" type="number" min="1" max="86400" /></label></section>
-                <DocumentConfigPanel v-else-if="selectedType === 'document'" :config="selected.data.config" :variable-groups="variableGroups" />
                 <NodeOutputPanel :node="selected" :copied-path="copiedVariablePath" @copy="copyVariableReference" />
                 <ExecutionPolicyPanel v-if="executionPolicyNodeTypes.has(selectedType)" :config="selected.data.config" @connect-error="openPaletteForSource(selected.id, 'error')" />
                 <details class="mt-5 rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)] p-3" open @toggle="syncConfigEditor"><summary class="cursor-pointer text-xs font-semibold">{{ t('designer.advancedConfig') }}</summary><JsonEditorField v-model="configText" class="mt-3" :label="t('workflow.configuration')" :error="configError" :groups="variableGroups" height-class="h-48" @focus="configEditing = true" @blur="configEditing = false; syncConfigEditor()" @input="updateSelectedConfig" /></details>

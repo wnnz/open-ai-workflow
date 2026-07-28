@@ -263,7 +263,7 @@ async def test_script(
                     "inputs": payload.inputs,
                     "timeout_seconds": payload.timeout_seconds,
                 },
-                headers={"X-Sandbox-Token": get_settings().app_secret_key},
+                headers={"X-Sandbox-Token": get_settings().sandbox_shared_secret},
             )
             response.raise_for_status()
             return ScriptTestOut.model_validate(response.json())

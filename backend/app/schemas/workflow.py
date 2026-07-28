@@ -91,6 +91,22 @@ class RunOut(ApiModel):
     finished_at: datetime | None
 
 
+class RunSummaryOut(ApiModel):
+    id: str
+    status: str
+    triggered_by: str
+    error: str | None
+    created_at: datetime
+    finished_at: datetime | None
+
+
+class RunPage(BaseModel):
+    items: list[RunSummaryOut]
+    total: int
+    limit: int
+    offset: int
+
+
 class ApprovalResponseIn(BaseModel):
     action_id: str = Field(min_length=1, max_length=64)
     data: dict[str, Any] = {}

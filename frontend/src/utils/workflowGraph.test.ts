@@ -94,6 +94,23 @@ describe('workflow graph utilities', () => {
     expect(isConnectionAllowed(nodes, [...edges, { id: 'b', source: 'task', target: 'end' }], { source: 'end', target: 'start' })).toBe(false)
   })
 
+  it('allows separate classifier branches to converge on the same target', () => {
+    const classifierNodes = [
+      ...nodes,
+      { id: 'classifier', type: 'classifier', position: { x: 100, y: 100 } },
+    ]
+    const classifierEdges = [
+      { id: 'sales', source: 'classifier', sourceHandle: 'category:sales', target: 'task' },
+    ]
+
+    expect(isConnectionAllowed(classifierNodes, classifierEdges, {
+      source: 'classifier', sourceHandle: 'category:support', target: 'task',
+    })).toBe(true)
+    expect(isConnectionAllowed(classifierNodes, classifierEdges, {
+      source: 'classifier', sourceHandle: 'category:sales', target: 'task',
+    })).toBe(false)
+  })
+
   it('lays a workflow out from left to right by dependency level', () => {
     const laidOut = layoutWorkflow(nodes, [
       { id: 'a', source: 'start', target: 'task' },

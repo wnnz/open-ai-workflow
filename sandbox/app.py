@@ -1,17 +1,16 @@
 import json
+import io
 import os
 import re
 import secrets
-import shutil
+import tarfile
 import time
-from pathlib import Path
 
 import docker
 from fastapi import FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="Open Workflow Sandbox", docs_url=None, redoc_url=None)
-ROOT = Path("/sandbox-data")
 ENTRYPOINT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -26,8 +25,19 @@ class ExecuteRequest(BaseModel):
 
 def authorize(token: str | None) -> None:
     expected = os.getenv("SANDBOX_SHARED_SECRET")
-    if expected and not secrets.compare_digest(token or "", expected):
+    if not expected or not secrets.compare_digest(token or "", expected):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid sandbox token")
+
+
+def build_archive(files: dict[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        for name, content in files.items():
+            item = tarfile.TarInfo(name)
+            item.size = len(content)
+            item.mode = 0o444
+            archive.addfile(item, io.BytesIO(content))
+    return buffer.getvalue()
 
 
 @app.get("/health")
@@ -41,19 +51,15 @@ def execute(payload: ExecuteRequest, x_sandbox_token: str | None = Header(None))
     if not ENTRYPOINT.fullmatch(payload.entrypoint):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid entrypoint")
     job_id = secrets.token_hex(12)
-    job_dir = ROOT / job_id
-    job_dir.mkdir(parents=True, exist_ok=False)
-    (job_dir / "user_script.py").write_text(payload.source, encoding="utf-8")
-    (job_dir / "input.json").write_text(json.dumps(payload.inputs), encoding="utf-8")
     runner = f'''import asyncio, contextlib, importlib.util, inspect, io, json, sys, traceback
-spec = importlib.util.spec_from_file_location("user_script", "/workspace/{job_id}/user_script.py")
+spec = importlib.util.spec_from_file_location("user_script", "/workspace/user_script.py")
 module = importlib.util.module_from_spec(spec)
 logs = io.StringIO()
 try:
     with contextlib.redirect_stdout(logs), contextlib.redirect_stderr(logs):
         spec.loader.exec_module(module)
         function = getattr(module, "{payload.entrypoint}")
-        inputs = json.load(open("/workspace/{job_id}/input.json", encoding="utf-8"))
+        inputs = json.load(open("/workspace/input.json", encoding="utf-8"))
         context = {{"temp_dir": "/tmp", "network_enabled": {str(payload.network_enabled)}}}
         result = function(inputs, context)
         if inspect.isawaitable(result): result = asyncio.run(result)
@@ -61,30 +67,39 @@ try:
 except Exception:
     print(json.dumps({{"status":"failed","outputs":{{}},"logs":logs.getvalue().splitlines(),"error":traceback.format_exc()}}, ensure_ascii=False))
 '''
-    (job_dir / "runner.py").write_text(runner, encoding="utf-8")
+    archive = build_archive(
+        {
+            "user_script.py": payload.source.encode(),
+            "input.json": json.dumps(payload.inputs).encode(),
+            "runner.py": runner.encode(),
+        }
+    )
     started = time.monotonic()
     client = docker.from_env()
     container = None
     try:
-        container = client.containers.run(
-            "python:3.12-alpine",
-            ["python", f"/workspace/{job_id}/runner.py"],
-            detach=True,
+        container = client.containers.create(
+            os.getenv("SANDBOX_RUNTIME_IMAGE", "open-ai-workflow-sandbox"),
+            ["python", "/workspace/runner.py"],
             network_disabled=not payload.network_enabled,
             mem_limit=f"{payload.memory_mb}m",
             nano_cpus=500_000_000,
             pids_limit=64,
-            read_only=True,
             cap_drop=["ALL"],
             security_opt=["no-new-privileges"],
-            tmpfs={"/tmp": "rw,noexec,nosuid,size=64m"},
-            volumes={os.getenv("SANDBOX_VOLUME", "open-ai-workflow_sandbox-data"): {"bind": "/workspace", "mode": "ro"}},
+            tmpfs={"/tmp": "rw,noexec,nosuid,size=64m,mode=1777"},
         )
+        if not container.put_archive("/workspace", archive):
+            raise RuntimeError("Could not stage sandbox files")
+        container.start()
         result = container.wait(timeout=payload.timeout_seconds)
-        output = container.logs(stdout=True, stderr=False).decode("utf-8", errors="replace").strip().splitlines()
+        output = container.logs(stdout=True, stderr=True).decode("utf-8", errors="replace").strip().splitlines()
         if not output:
             raise RuntimeError(f"Runner exited without output: {result}")
-        response = json.loads(output[-1])
+        try:
+            response = json.loads(output[-1])
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Runner exited with invalid output: {output[-10:]}") from exc
         response["elapsed_ms"] = int((time.monotonic() - started) * 1000)
         return response
     except Exception as exc:
@@ -96,4 +111,3 @@ except Exception:
         if container:
             try: container.remove(force=True)
             except Exception: pass
-        shutil.rmtree(job_dir, ignore_errors=True)

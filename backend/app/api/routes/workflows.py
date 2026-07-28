@@ -1,9 +1,9 @@
 from copy import deepcopy
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
-from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import CurrentUser, DbSession
 from app.core.config import get_settings
@@ -25,6 +25,8 @@ from app.schemas.workflow import (
     PublishIn,
     RunIn,
     RunOut,
+    RunPage,
+    RunSummaryOut,
     WorkflowCreate,
     WorkflowEnvironmentVariableCreate,
     WorkflowEnvironmentVariableOut,
@@ -34,10 +36,12 @@ from app.schemas.workflow import (
     WorkflowVersionOut,
 )
 from app.services.model_providers import load_model_provider_runtimes
-from app.services.storage import put
+from app.services.run_events import stream_run_events
+from app.services.scheduling import next_schedule_at
+from app.services.script_runtime import hydrate_script_resources
+from app.services.task_queue import enqueue_workflow_run
+from app.services.uploads import store_upload
 from app.services.workflow_engine import (
-    WorkflowPause,
-    execute_graph,
     execute_node_preview,
     resolve_script_references,
     validate_draft_graph,
@@ -166,46 +170,6 @@ async def resolve_subworkflow_references(
         config["_resolved_reference"] = reference
         references[str(node["id"])] = reference
     return resolved_graph, references
-
-
-async def set_run_waiting(
-    db: DbSession,
-    run: WorkflowRun,
-    graph: dict,
-    pause: WorkflowPause,
-) -> WorkflowApproval:
-    timeout_minutes = int(pause.request.get("timeout_minutes", 4320))
-    approval = WorkflowApproval(
-        workspace_id=run.workspace_id,
-        workflow_id=run.workflow_id,
-        run_id=run.id,
-        node_id=pause.node_id,
-        request=pause.request,
-        graph=deepcopy(graph),
-        resume_state=pause.resume_state,
-        expires_at=datetime.now(UTC) + timedelta(minutes=timeout_minutes),
-    )
-    db.add(approval)
-    await db.flush()
-    run.status = "waiting"
-    run.outputs = {}
-    run.trace = [
-        *pause.resume_state.get("trace", []),
-        {
-            "node_id": pause.node_id,
-            "node_type": "human",
-            "status": "waiting",
-            "output": {"approval_id": approval.id, "expires_at": approval.expires_at.isoformat()},
-            "error": None,
-            "attempts": 0,
-            "error_handled": False,
-            "started_at": datetime.now(UTC).isoformat(),
-            "finished_at": None,
-        },
-    ]
-    run.error = None
-    run.finished_at = None
-    return approval
 
 
 @router.get("", response_model=list[WorkflowOut])
@@ -347,22 +311,15 @@ async def upload_workflow_file(
 ) -> StoredFile:
     await require_role(db, workspace_id, user.id)
     await get_workflow(db, workspace_id, workflow_id)
-    content = await file.read()
-    if len(content) > get_settings().max_upload_bytes:
-        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "File too large")
-    key, digest = await run_in_threadpool(
-        put,
-        workspace_id,
-        file.filename or "file",
-        file.content_type or "application/octet-stream",
-        content,
+    key, digest, size = await store_upload(
+        workspace_id, file, get_settings().max_upload_bytes
     )
     stored = StoredFile(
         workspace_id=workspace_id,
         object_key=key,
         filename=file.filename or "file",
         content_type=file.content_type or "application/octet-stream",
-        size=len(content),
+        size=size,
         sha256=digest,
         created_by=user.id,
     )
@@ -451,6 +408,7 @@ async def publish_workflow(
     await db.flush()
     workflow.published_version_id = version.id
     workflow.published_access = payload.access
+    workflow.next_run_at = next_schedule_at(publish_graph)
     db.add(
         audit(
             workspace_id,
@@ -521,15 +479,6 @@ async def run_draft(
 ) -> WorkflowRun:
     await require_role(db, workspace_id, user.id)
     workflow = await get_workflow(db, workspace_id, workflow_id)
-    run = WorkflowRun(
-        workspace_id=workspace_id,
-        workflow_id=workflow_id,
-        status="running",
-        inputs=payload.inputs,
-        created_by=user.id,
-    )
-    db.add(run)
-    await db.flush()
     execution_graph, _ = await resolve_subworkflow_references(
         db,
         workspace_id,
@@ -537,29 +486,22 @@ async def run_draft(
         published=False,
         ancestors=(workflow.id,),
     )
-    environment = await load_workflow_environment(db, workspace_id, workflow_id)
-    model_providers = await load_model_provider_runtimes(db, workspace_id)
-    system = build_system_variables(workflow_id=workflow_id, run_id=run.id, user_id=user.id)
-    try:
-        outputs, trace = execute_graph(
-            execution_graph,
-            payload.inputs,
-            environment=environment,
-            system=system,
-            model_providers=model_providers,
-        )
-        run.status = "succeeded"
-        run.outputs = outputs
-        run.trace = trace
-        run.finished_at = datetime.now(UTC)
-    except WorkflowPause as pause:
-        await set_run_waiting(db, run, execution_graph, pause)
-    except Exception as exc:
-        run.status = "failed"
-        run.error = str(exc)
-        run.finished_at = datetime.now(UTC)
+    execution_graph = await hydrate_script_resources(db, execution_graph)
+    validate_run_inputs(execution_graph, payload.inputs)
+    run = WorkflowRun(
+        workspace_id=workspace_id,
+        workflow_id=workflow_id,
+        status="pending",
+        inputs=payload.inputs,
+        execution_graph=execution_graph,
+        created_by=user.id,
+    )
+    db.add(run)
+    await db.flush()
     await db.commit()
     await db.refresh(run)
+    if await enqueue_workflow_run(run.id):
+        await db.refresh(run)
     return run
 
 
@@ -646,33 +588,14 @@ async def respond_to_approval(
     resume_context = resume_state.setdefault("context", {})
     response_node_id = str(approval.request.get("_response_node_id") or approval.node_id)
     resume_context.setdefault("__human_responses__", {})[response_node_id] = response
-    run.status = "running"
+    approval.resume_state = resume_state
+    run.status = "pending"
     run.error = None
-    try:
-        environment = await load_workflow_environment(db, workspace_id, workflow_id)
-        model_providers = await load_model_provider_runtimes(db, workspace_id)
-        system = build_system_variables(workflow_id=workflow_id, run_id=run.id, user_id=user.id)
-        outputs, trace = execute_graph(
-            approval.graph,
-            run.inputs,
-            resume_state=resume_state,
-            environment=environment,
-            system=system,
-            model_providers=model_providers,
-        )
-        run.status = "succeeded"
-        run.outputs = outputs
-        run.trace = trace
-        run.finished_at = datetime.now(UTC)
-    except WorkflowPause as pause:
-        await set_run_waiting(db, run, approval.graph, pause)
-    except Exception as exc:
-        run.status = "failed"
-        run.error = str(exc)
-        run.finished_at = datetime.now(UTC)
     db.add(audit(workspace_id, user.id, "workflow.approval_responded", "workflow_run", run.id, {"approval_id": approval.id, "action_id": payload.action_id}))
     await db.commit()
     await db.refresh(run)
+    if await enqueue_workflow_run(run.id, approval.id):
+        await db.refresh(run)
     return run
 
 
@@ -731,22 +654,73 @@ async def run_draft_node(
     return run
 
 
-@router.get("/{workflow_id}/runs", response_model=list[RunOut])
+@router.get("/{workflow_id}/runs", response_model=RunPage)
 async def list_runs(
-    workspace_id: str, workflow_id: str, db: DbSession, user: CurrentUser
-) -> list[WorkflowRun]:
+    workspace_id: str,
+    workflow_id: str,
+    db: DbSession,
+    user: CurrentUser,
+    limit: int = 20,
+    offset: int = 0,
+) -> RunPage:
     await require_role(db, workspace_id, user.id)
     await get_workflow(db, workspace_id, workflow_id)
-    return list(
-        (
-            await db.scalars(
-                select(WorkflowRun)
-                .where(
-                    WorkflowRun.workspace_id == workspace_id,
-                    WorkflowRun.workflow_id == workflow_id,
-                )
-                .order_by(WorkflowRun.created_at.desc())
-                .limit(100)
+    limit = min(max(limit, 1), 100)
+    offset = max(offset, 0)
+    filters = (
+        WorkflowRun.workspace_id == workspace_id,
+        WorkflowRun.workflow_id == workflow_id,
+    )
+    total = await db.scalar(select(func.count()).select_from(WorkflowRun).where(*filters)) or 0
+    rows = (
+        await db.execute(
+            select(
+                WorkflowRun.id,
+                WorkflowRun.status,
+                WorkflowRun.triggered_by,
+                WorkflowRun.error,
+                WorkflowRun.created_at,
+                WorkflowRun.finished_at,
             )
-        ).all()
+            .where(*filters)
+            .order_by(WorkflowRun.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+    ).mappings().all()
+    items = [RunSummaryOut.model_validate(dict(row)) for row in rows]
+    return RunPage(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/{workflow_id}/runs/{run_id}", response_model=RunOut)
+async def get_run(
+    workspace_id: str,
+    workflow_id: str,
+    run_id: str,
+    db: DbSession,
+    user: CurrentUser,
+) -> WorkflowRun:
+    await require_role(db, workspace_id, user.id)
+    run = await db.get(WorkflowRun, run_id)
+    if not run or run.workspace_id != workspace_id or run.workflow_id != workflow_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Workflow run not found")
+    return run
+
+
+@router.get("/{workflow_id}/runs/{run_id}/events")
+async def get_run_events(
+    workspace_id: str,
+    workflow_id: str,
+    run_id: str,
+    db: DbSession,
+    user: CurrentUser,
+) -> StreamingResponse:
+    await require_role(db, workspace_id, user.id)
+    run = await db.get(WorkflowRun, run_id)
+    if not run or run.workspace_id != workspace_id or run.workflow_id != workflow_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Workflow run not found")
+    return StreamingResponse(
+        stream_run_events(run.id, run.status),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

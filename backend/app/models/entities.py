@@ -149,6 +149,9 @@ class Workflow(Base):
     draft_version: Mapped[int] = mapped_column(Integer, default=1)
     published_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     published_access: Mapped[str] = mapped_column(String(20), default="public")
+    next_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
@@ -200,7 +203,9 @@ class WorkflowRun(Base):
     workflow_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
     triggered_by: Mapped[str] = mapped_column(String(40), default="studio")
+    trigger_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     inputs: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    execution_graph: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     outputs: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     trace: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

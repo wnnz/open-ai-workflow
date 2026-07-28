@@ -10,6 +10,7 @@ import AlertBanner from '@/components/ui/AlertBanner.vue'
 import FormField from '@/components/ui/FormField.vue'
 import WorkflowInputField from '@/components/WorkflowInputField.vue'
 import { coerceWorkflowInputValues, createWorkflowInputValues } from '@/utils/workflowInputs'
+import { consumeRunEvents } from '@/api/runEvents'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -20,7 +21,7 @@ const loading = ref(false)
 const result = ref<any>(null)
 const error = ref('')
 const slug = String(route.params.slug)
-const headers = () => apiKey.value ? { Authorization: `Bearer ${apiKey.value}` } : {}
+const headers = (): Record<string, string> => apiKey.value ? { Authorization: `Bearer ${apiKey.value}` } : {}
 
 async function load() {
   try {
@@ -51,6 +52,14 @@ async function run() {
   try {
     const inputs = coerceWorkflowInputValues(app.value.input_fields, values.value)
     result.value = (await axios.post(`/v1/apps/${slug}/run`, { inputs }, { headers: { ...headers(), 'Content-Type': 'application/json' } })).data
+    let streamedText = ''
+    await consumeRunEvents(`/v1/apps/${slug}/runs/${result.value.run_id}/events`, event => {
+      if (event.type === 'token') {
+        streamedText += String(event.delta || '')
+        result.value = { ...result.value, status: 'running', outputs: { text: streamedText } }
+      } else if (event.status) result.value = { ...result.value, status: event.status }
+    }, headers())
+    result.value = (await axios.get(`/v1/apps/${slug}/runs/${result.value.run_id}`, { headers: headers() })).data
   } catch (cause: any) { error.value = cause.response?.data?.detail || String(cause) }
   finally { loading.value = false }
 }

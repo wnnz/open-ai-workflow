@@ -1,3 +1,4 @@
+import gc
 import os
 from copy import deepcopy
 from pathlib import Path
@@ -5,6 +6,7 @@ from time import sleep as sleep_for_test
 from unittest.mock import AsyncMock
 
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test-openworkflow.db"
+os.environ["TASK_ALWAYS_EAGER"] = "true"
 Path("test-openworkflow.db").unlink(missing_ok=True)
 
 import httpx  # noqa: E402
@@ -88,7 +90,13 @@ def schema():
     asyncio.run(create_schema())
     yield
     asyncio.run(engine.dispose())
-    Path("test-openworkflow.db").unlink(missing_ok=True)
+    gc.collect()
+    for _ in range(20):
+        try:
+            Path("test-openworkflow.db").unlink(missing_ok=True)
+            break
+        except PermissionError:
+            sleep_for_test(0.05)
 
 
 @pytest.fixture(scope="module")
@@ -486,7 +494,7 @@ def test_start_node_uses_one_trigger_and_validates_inputs(client: TestClient):
     runs = client.get(
         f"/api/v1/workspaces/{workspace_id}/workflows/{workflow['id']}/runs",
         headers=headers,
-    ).json()
+    ).json()["items"]
     assert {run["triggered_by"] for run in runs} >= {"api"}
 
     multiple_triggers = deepcopy(graph)
@@ -727,6 +735,38 @@ def test_classifier_routes_to_stable_category_handles():
     assert fallback_output == {"result": "support"}
     assert fallback_trace[1]["output"]["branch"] == "category:support"
     assert fallback_trace[1]["output"]["fallback"] is True
+
+
+def test_classifier_branches_can_converge_on_one_node():
+    graph = {
+        "schema_version": 1,
+        "nodes": [
+            {"id": "start", "type": "start", "data": {"config": {"triggers": ["api"]}}},
+            {"id": "classifier", "type": "classifier", "data": {"config": {
+                "input": "{{inputs.message}}",
+                "categories": [
+                    {"id": "sales", "name": "Sales", "keywords": ["buy"]},
+                    {"id": "support", "name": "Support", "keywords": ["help"]},
+                ],
+            }}},
+            {"id": "shared", "type": "template", "data": {"config": {"template": "shared"}}},
+            {"id": "end", "type": "end", "data": {"config": {"outputs": [
+                {"name": "result", "type": "String", "value": "{{shared.text}}"},
+            ]}}},
+        ],
+        "edges": [
+            {"source": "start", "target": "classifier"},
+            {"source": "classifier", "sourceHandle": "category:sales", "target": "shared"},
+            {"source": "classifier", "sourceHandle": "category:support", "target": "shared"},
+            {"source": "shared", "target": "end"},
+        ],
+    }
+
+    output, trace = execute_graph(graph, {"message": "buy now"})
+
+    assert output == {"result": "shared"}
+    assert [item["node_id"] for item in trace] == ["start", "classifier", "shared", "end"]
+    assert trace[1]["output"]["branch"] == "category:sales"
 
 
 def test_llm_config_supports_messages_and_structured_output():
@@ -1226,7 +1266,8 @@ def test_management_resource_lifecycle_and_run_logs(client: TestClient):
         headers=headers,
     )
     assert logs.status_code == 200
-    assert isinstance(logs.json(), list)
+    assert isinstance(logs.json()["items"], list)
+    assert logs.json()["limit"] == 20
 
 
 @pytest.mark.asyncio
@@ -1771,3 +1812,136 @@ def test_subworkflow_human_approval_resumes_across_the_nested_call(client: TestC
         "child-review",
         "child-ok",
     ]
+
+
+def test_model_provider_request_honors_max_retries(monkeypatch):
+    import app.services.model_execution as model_execution
+
+    request = httpx.Request("POST", "https://models.example/v1/chat/completions")
+
+    class Client:
+        calls = 0
+
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, *args, **kwargs):
+            Client.calls += 1
+            return httpx.Response(
+                503 if Client.calls == 1 else 200,
+                request=request,
+                json={"ok": True},
+            )
+
+    monkeypatch.setattr(model_execution, "ensure_safe_runtime_destination", lambda runtime: None)
+    monkeypatch.setattr(model_execution.httpx, "Client", Client)
+    monkeypatch.setattr(model_execution, "sleep", lambda seconds: None)
+    result = model_execution.provider_request(
+        {
+            "base_url": "https://models.example/v1",
+            "api_key": "",
+            "config": {"timeout_seconds": 5, "max_retries": 1},
+        },
+        "/chat/completions",
+        {"model": "test"},
+    )
+    assert result == {"ok": True}
+    assert Client.calls == 2
+
+
+def test_model_provider_stream_emits_incremental_tokens(monkeypatch):
+    import app.services.model_execution as model_execution
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self):
+            return iter(
+                [
+                    'data: {"choices":[{"delta":{"content":"hel"}}]}',
+                    'data: {"choices":[{"delta":{"content":"lo"}}]}',
+                    "data: [DONE]",
+                ]
+            )
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def stream(self, *args, **kwargs):
+            return Response()
+
+    monkeypatch.setattr(model_execution, "ensure_safe_runtime_destination", lambda runtime: None)
+    monkeypatch.setattr(model_execution.httpx, "Client", Client)
+    tokens = []
+    result = model_execution.provider_stream_request(
+        {
+            "base_url": "https://models.example/v1",
+            "api_key": "",
+            "config": {"timeout_seconds": 5, "max_retries": 0},
+        },
+        "/chat/completions",
+        {"model": "test"},
+        tokens.append,
+    )
+    assert tokens == ["hel", "lo"]
+    assert result["choices"][0]["message"]["content"] == "hello"
+
+
+def test_agent_executes_tool_and_returns_final_answer(monkeypatch):
+    import app.services.model_execution as model_execution
+
+    responses = iter(
+        [
+            {
+                "text": "",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "add", "arguments": '{"a":2,"b":3}'},
+                    }
+                ],
+            },
+            {"text": "5", "tool_calls": []},
+        ]
+    )
+    monkeypatch.setattr(model_execution, "execute_llm", lambda runtime, config: next(responses))
+    calls = []
+
+    def execute(tool, arguments):
+        calls.append((tool["name"], arguments))
+        return {"sum": arguments["a"] + arguments["b"]}
+
+    result = model_execution.execute_agent(
+        {"default_model": "test", "config": {"api_mode": "chat_completions"}},
+        {
+            "query": "add",
+            "instructions": "Use tools",
+            "tools": [{"id": "add", "name": "add", "enabled": True}],
+            "return_intermediate_steps": True,
+        },
+        execute,
+    )
+    assert result["text"] == "5"
+    assert calls == [("add", {"a": 2, "b": 3})]
+    assert result["intermediate_steps"][0]["result"] == {"sum": 5}

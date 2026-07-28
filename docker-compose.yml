@@ -3,9 +3,10 @@ name: open-ai-workflow
 x-build-proxy: &build-proxy
   HTTP_PROXY: ${CONTAINER_HTTP_PROXY:-http://host.docker.internal:10808}
   HTTPS_PROXY: ${CONTAINER_HTTP_PROXY:-http://host.docker.internal:10808}
-  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,postgres,redis,minio,api,worker,sandbox,document-worker}
+  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,postgres,redis,minio,api,worker,sandbox,sandbox-docker-proxy,document-worker}
 
 x-backend: &backend
+  image: open-ai-workflow-api
   build:
     context: ./backend
     args: *build-proxy
@@ -37,8 +38,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    ports:
-      - "5432:5432"
 
   redis:
     image: redis:7-alpine
@@ -51,16 +50,14 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    ports:
-      - "6379:6379"
 
   minio:
     image: minio/minio:latest
     restart: unless-stopped
     command: server /data --console-address :9001
     environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-openworkflow}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-replace-me}
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set}
     volumes:
       - minio-data:/data
     healthcheck:
@@ -68,15 +65,15 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    ports:
-      - "9000:9000"
-      - "9001:9001"
 
   api:
     <<: *backend
-    command: sh -c "python -m app.bootstrap && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "8000:8000"
+    networks:
+      - default
+      - sandbox-runtime
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -85,27 +82,54 @@ services:
 
   worker:
     <<: *backend
-    command: celery -A app.worker.celery worker --loglevel=INFO
+    command: celery -A app.worker.celery worker --loglevel=INFO --concurrency=1
+    networks:
+      - default
+      - sandbox-runtime
 
   beat:
     <<: *backend
     command: celery -A app.worker.celery beat --loglevel=INFO
 
   sandbox:
+    image: open-ai-workflow-sandbox
     build:
       context: ./sandbox
       args: *build-proxy
     restart: unless-stopped
     environment:
-      SANDBOX_SHARED_SECRET: ${APP_SECRET_KEY}
-      SANDBOX_VOLUME: open-ai-workflow_sandbox-data
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      SANDBOX_SHARED_SECRET: ${SANDBOX_SHARED_SECRET:?SANDBOX_SHARED_SECRET must be set}
+      SANDBOX_RUNTIME_IMAGE: open-ai-workflow-sandbox
+      DOCKER_HOST: tcp://sandbox-docker-proxy:2375
+    networks:
+      - sandbox-runtime
+      - sandbox-control
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+
+  sandbox-docker-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      POST: 1
     volumes:
-      - //var/run/docker.sock:/var/run/docker.sock
-      - sandbox-data:/sandbox-data
-    ports:
-      - "8081:8081"
+      - //var/run/docker.sock:/var/run/docker.sock:ro
+      - sandbox-proxy-config:/usr/local/etc/haproxy
+    networks:
+      - sandbox-control
+    read_only: true
+    tmpfs:
+      - /run:size=1m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   document-worker:
     profiles: ["document"]
@@ -131,4 +155,10 @@ volumes:
   postgres-data:
   redis-data:
   minio-data:
-  sandbox-data:
+  sandbox-proxy-config:
+
+networks:
+  sandbox-runtime:
+    internal: true
+  sandbox-control:
+    internal: true

@@ -7,6 +7,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY pyproject.toml ./
 RUN pip install --no-cache-dir .
 COPY app ./app
+COPY alembic.ini ./
+COPY alembic ./alembic
 RUN useradd --create-home app && chown -R app:app /app
 USER app
 EXPOSE 8000

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { BrainCircuit, Braces, Globe2, Plus, Trash2, Wrench } from 'lucide-vue-next'
+import { BrainCircuit, Braces, Plus, Trash2, Wrench } from 'lucide-vue-next'
 import VariableField from '@/components/VariableField.vue'
 import InputText from '@/volt/InputText.vue'
 import Select from '@/volt/Select.vue'
@@ -19,7 +19,6 @@ function ensureConfig() {
 ensureConfig()
 
 const candidates = computed(() => [
-  { key: 'http:builtin', type: 'http', id: 'builtin', name: 'HTTP Request' },
   ...props.scripts.map(item => ({ key: `script:${item.id}`, type: 'script', id: item.id, name: item.name })),
 ])
 
@@ -30,7 +29,7 @@ function addTool() {
   candidate.value = ''
 }
 function removeTool(id: string) { props.config.tools = props.config.tools.filter((tool: any) => tool.id !== id) }
-function toolIcon(type: string) { return type === 'script' ? Braces : Globe2 }
+function toolIcon(_type?: string) { return Braces }
 </script>
 
 <template>

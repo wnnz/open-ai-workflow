@@ -3,6 +3,8 @@ from __future__ import annotations
 import ipaddress
 import json
 import socket
+from collections.abc import Callable
+from time import sleep
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -42,21 +44,37 @@ def provider_request(
 ) -> dict[str, Any]:
     provider_config = runtime.get("config", {})
     ensure_safe_runtime_destination(runtime)
-    try:
-        with httpx.Client(
-            timeout=float(provider_config.get("timeout_seconds", 30)),
-            follow_redirects=False,
-        ) as client:
-            response = client.post(
-                f"{runtime['base_url']}{path}",
-                headers=provider_headers(str(runtime.get("api_key", "")), provider_config),
-                json=payload,
-            )
-            response.raise_for_status()
-            result = response.json()
-    except httpx.TimeoutException as exc:
-        raise HTTPException(status.HTTP_504_GATEWAY_TIMEOUT, "Model request timed out") from exc
-    except httpx.HTTPStatusError as exc:
+    max_retries = int(provider_config.get("max_retries", 1))
+    response: httpx.Response | None = None
+    last_error: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            with httpx.Client(
+                timeout=float(provider_config.get("timeout_seconds", 30)),
+                follow_redirects=False,
+            ) as client:
+                response = client.post(
+                    f"{runtime['base_url']}{path}",
+                    headers=provider_headers(str(runtime.get("api_key", "")), provider_config),
+                    json=payload,
+                )
+                response.raise_for_status()
+                result = response.json()
+            break
+        except (httpx.TimeoutException, httpx.TransportError, ValueError) as exc:
+            last_error = exc
+        except httpx.HTTPStatusError as exc:
+            last_error = exc
+            if exc.response.status_code < 500 and exc.response.status_code != 429:
+                break
+        if attempt < max_retries:
+            sleep(min(2**attempt, 8))
+    else:
+        result = None
+    if isinstance(last_error, httpx.TimeoutException) and (response is None or not response.is_success):
+        raise HTTPException(status.HTTP_504_GATEWAY_TIMEOUT, "Model request timed out") from last_error
+    if isinstance(last_error, httpx.HTTPStatusError) and (response is None or not response.is_success):
+        exc = last_error
         detail = f"Model request failed with HTTP {exc.response.status_code}"
         try:
             error = exc.response.json().get("error", {})
@@ -66,11 +84,111 @@ def provider_request(
         except ValueError:
             pass
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail) from exc
-    except (httpx.HTTPError, ValueError) as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Model request failed: {exc}") from exc
+    if last_error and (response is None or not response.is_success):
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Model request failed: {last_error}") from last_error
     if not isinstance(result, dict):
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Model response must be a JSON object")
     return result
+
+
+def provider_stream_request(
+    runtime: dict[str, Any],
+    path: str,
+    payload: dict[str, Any],
+    on_token: Callable[[str], None],
+) -> dict[str, Any]:
+    provider_config = runtime.get("config", {})
+    ensure_safe_runtime_destination(runtime)
+    request_payload = {**payload, "stream": True}
+    max_retries = int(provider_config.get("max_retries", 1))
+    for attempt in range(max_retries + 1):
+        emitted = False
+        try:
+            text_parts: list[str] = []
+            reasoning_parts: list[str] = []
+            tool_calls: dict[int, dict[str, Any]] = {}
+            usage: dict[str, Any] = {}
+            model = str(payload.get("model", ""))
+            completed_response: dict[str, Any] | None = None
+            with httpx.Client(
+                timeout=float(provider_config.get("timeout_seconds", 30)),
+                follow_redirects=False,
+            ) as client:
+                with client.stream(
+                    "POST",
+                    f"{runtime['base_url']}{path}",
+                    headers=provider_headers(str(runtime.get("api_key", "")), provider_config),
+                    json=request_payload,
+                ) as response:
+                    response.raise_for_status()
+                    for line in response.iter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if not data or data == "[DONE]":
+                            continue
+                        event = json.loads(data)
+                        event_type = str(event.get("type", ""))
+                        if event_type == "response.output_text.delta":
+                            delta = str(event.get("delta", ""))
+                            if delta:
+                                emitted = True
+                                text_parts.append(delta)
+                                on_token(delta)
+                        elif event_type == "response.completed" and isinstance(event.get("response"), dict):
+                            completed_response = event["response"]
+                        choices = event.get("choices", [])
+                        if choices and isinstance(choices[0], dict):
+                            delta = choices[0].get("delta", {})
+                            if isinstance(delta, dict):
+                                content = str(delta.get("content") or "")
+                                reasoning = str(delta.get("reasoning_content") or "")
+                                if content:
+                                    emitted = True
+                                    text_parts.append(content)
+                                    on_token(content)
+                                if reasoning:
+                                    reasoning_parts.append(reasoning)
+                                for call in delta.get("tool_calls", []) or []:
+                                    index = int(call.get("index", 0))
+                                    current = tool_calls.setdefault(
+                                        index,
+                                        {"id": call.get("id", ""), "type": "function", "function": {"name": "", "arguments": ""}},
+                                    )
+                                    if call.get("id"):
+                                        current["id"] = call["id"]
+                                    function = call.get("function", {})
+                                    current["function"]["name"] += str(function.get("name") or "")
+                                    current["function"]["arguments"] += str(function.get("arguments") or "")
+                        if isinstance(event.get("usage"), dict):
+                            usage = event["usage"]
+                        if event.get("model"):
+                            model = str(event["model"])
+            if completed_response:
+                return completed_response
+            return {
+                "model": model,
+                "usage": usage,
+                "choices": [
+                    {
+                        "message": {
+                            "content": "".join(text_parts),
+                            "reasoning_content": "".join(reasoning_parts),
+                            "tool_calls": [tool_calls[index] for index in sorted(tool_calls)],
+                        }
+                    }
+                ],
+            }
+        except (httpx.HTTPError, ValueError) as exc:
+            if emitted or attempt >= max_retries:
+                if isinstance(exc, httpx.HTTPStatusError):
+                    raise HTTPException(
+                        status.HTTP_502_BAD_GATEWAY,
+                        f"Model stream failed with HTTP {exc.response.status_code}",
+                    ) from exc
+                raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Model stream failed: {exc}") from exc
+            sleep(min(2**attempt, 8))
+    raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Model stream failed")
 
 
 def normalize_usage(value: Any) -> dict[str, int]:
@@ -216,9 +334,16 @@ def execute_llm(runtime: dict[str, Any], config: dict[str, Any]) -> dict[str, An
             "input": messages,
             "max_output_tokens": int(config.get("max_tokens", 1024)),
         }
+        if config.get("previous_response_id"):
+            payload["previous_response_id"] = config["previous_response_id"]
         if tools:
             payload["tools"] = [{"type": "function", **item["function"]} for item in tools]
-        result = provider_request(runtime, "/responses", payload)
+        callback = config.get("_stream_callback")
+        result = (
+            provider_stream_request(runtime, "/responses", payload, callback)
+            if callable(callback) and capabilities.get("streaming", True)
+            else provider_request(runtime, "/responses", payload)
+        )
     else:
         payload = {
             "model": model,
@@ -232,13 +357,19 @@ def execute_llm(runtime: dict[str, Any], config: dict[str, Any]) -> dict[str, An
             payload["response_format"] = output_format
         if tools:
             payload["tools"] = tools
-        result = provider_request(runtime, "/chat/completions", payload)
+        callback = config.get("_stream_callback")
+        result = (
+            provider_stream_request(runtime, "/chat/completions", payload, callback)
+            if callable(callback) and capabilities.get("streaming", True)
+            else provider_request(runtime, "/chat/completions", payload)
+        )
     text, reasoning, tool_calls = response_text(result)
     output: dict[str, Any] = {
         "text": text,
         "tool_calls": tool_calls,
         "_usage": normalize_usage(result.get("usage")),
         "_model": result.get("model", model),
+        "_response_id": result.get("id"),
     }
     if config.get("reasoning", {}).get("separate"):
         output["reasoning_content"] = reasoning
@@ -250,22 +381,79 @@ def execute_llm(runtime: dict[str, Any], config: dict[str, Any]) -> dict[str, An
     return output
 
 
-def execute_agent(runtime: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    llm_config = {
+def execute_agent(
+    runtime: dict[str, Any],
+    config: dict[str, Any],
+    tool_executor: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": str(config.get("instructions", ""))},
+        {"role": "user", "content": str(config.get("query", ""))},
+    ]
+    llm_config: dict[str, Any] = {
         "model": config.get("model") or runtime.get("default_model"),
-        "messages": [
-            {"role": "system", "content": str(config.get("instructions", ""))},
-            {"role": "user", "content": str(config.get("query", ""))},
-        ],
+        "messages": messages,
         "temperature": config.get("temperature", 0.3),
         "top_p": config.get("top_p", 1),
         "max_tokens": config.get("max_tokens", 2048),
         "response_format": "text",
         "tools": config.get("tools", []),
     }
-    output = execute_llm(runtime, llm_config)
-    output["intermediate_steps"] = []
-    return output
+    steps: list[dict[str, Any]] = []
+    tools_by_name = {
+        str(tool.get("name") or tool.get("id") or "tool").replace(" ", "_")[:64]: tool
+        for tool in config.get("tools", [])
+        if isinstance(tool, dict) and tool.get("enabled", True)
+    }
+    for _ in range(max(1, min(int(config.get("max_iterations", 8)), 50))):
+        output = execute_llm(runtime, llm_config)
+        calls = output.get("tool_calls", [])
+        if not calls:
+            output["intermediate_steps"] = steps if config.get("return_intermediate_steps") else []
+            return output
+        if not tool_executor:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Agent tools are not executable")
+        assistant_calls: list[dict[str, Any]] = []
+        response_tool_outputs: list[dict[str, Any]] = []
+        for call in calls:
+            function = call.get("function", {}) if isinstance(call, dict) else {}
+            name = str(function.get("name") or call.get("name") or "")
+            raw_arguments = function.get("arguments", call.get("arguments", "{}"))
+            try:
+                arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Model returned invalid tool arguments") from exc
+            if not isinstance(arguments, dict) or name not in tools_by_name:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Unknown agent tool: {name}")
+            result = tool_executor(tools_by_name[name], arguments)
+            call_id = str(call.get("id") or call.get("call_id") or name)
+            steps.append({"tool": name, "arguments": arguments, "result": result})
+            assistant_calls.append(call)
+            if runtime.get("config", {}).get("api_mode") == "responses":
+                response_tool_outputs.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+            else:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+        if response_tool_outputs:
+            llm_config["messages"] = response_tool_outputs
+            llm_config["previous_response_id"] = output.get("_response_id")
+        else:
+            messages.insert(
+                len(messages) - len(assistant_calls),
+                {"role": "assistant", "content": output.get("text", ""), "tool_calls": assistant_calls},
+            )
+    raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Agent reached its iteration limit")
 
 
 def json_schema_for_fields(fields: list[dict[str, Any]]) -> dict[str, Any]:

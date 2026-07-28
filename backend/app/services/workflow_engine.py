@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict, deque
+from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor
 from concurrent.futures import wait as wait_for_futures
 from copy import deepcopy
@@ -19,7 +20,12 @@ from jinja2.sandbox import SandboxedEnvironment
 
 from app.core.config import get_settings
 from app.services.model_execution import execute_agent, execute_extractor, execute_llm
-from app.services.scripts import validate_script
+from app.services.scripts import validate_inputs, validate_script
+from app.services.workflow_node_registry import execute_registered_node
+from app.services.workflow_values import (
+    coerce_assignment_value,
+    extract_structured_parameters,
+)
 
 VARIABLE = re.compile(r"\{\{\s*([^{}\r\n]+?)\s*\}\}")
 EXECUTION_POLICY_NODE_TYPES = {
@@ -1000,6 +1006,7 @@ def execute_parallel_graph(
 def checkpoint_context(context: dict[str, Any]) -> dict[str, Any]:
     checkpoint = deepcopy(context)
     checkpoint.pop("__model_providers__", None)
+    checkpoint.pop("__event_callback__", None)
     return checkpoint
 
 
@@ -1008,6 +1015,7 @@ def execute_graph(
     environment: dict[str, Any] | None = None,
     system: dict[str, Any] | None = None,
     model_providers: dict[str, dict[str, Any]] | None = None,
+    event_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Execute a validated workflow graph with runtime-only provider credentials."""
     validate_graph(graph)
@@ -1016,7 +1024,7 @@ def execute_graph(
         node.get("type") in {"human", "subworkflow"} and not node.get("parentNode")
         for node in graph.get("nodes", [])
     )
-    if not resume_state and not pause_capable:
+    if not resume_state and not pause_capable and event_callback is None:
         return execute_parallel_graph(
             graph,
             inputs,
@@ -1044,6 +1052,7 @@ def execute_graph(
         trace = deepcopy(resume_state.get("trace", []))
         visited = int(resume_state.get("visited", 0))
         context["__model_providers__"] = model_providers or {}
+        context["__event_callback__"] = event_callback
     else:
         queue = deque(node_id for node_id in nodes if incoming[node_id] == 0)
         context: dict[str, Any] = {
@@ -1051,6 +1060,7 @@ def execute_graph(
             "env": deepcopy(environment or {}),
             "sys": deepcopy(system or {}),
             "__model_providers__": model_providers or {},
+            "__event_callback__": event_callback,
         }
         reachable = {node_id for node_id, node in nodes.items() if node.get("type") == "start"}
         trace: list[dict[str, Any]] = []
@@ -1065,6 +1075,8 @@ def execute_graph(
         execution_error: str | None = None
         execution_attempts = 0
         if node_id in reachable:
+            if event_callback:
+                event_callback({"type": "node_started", "node_id": node_id, "node_type": node_type})
             trace_input = build_node_trace_input(node, context)
             if node_type == "human" and node_id not in context.get("__human_responses__", {}):
                 config = resolve_value(node.get("data", {}).get("config", {}), context)
@@ -1128,6 +1140,16 @@ def execute_graph(
                     "finished_at": finished.isoformat(),
                 }
             )
+            if event_callback:
+                event_callback(
+                    {
+                        "type": "node_finished",
+                        "node_id": node_id,
+                        "node_type": node_type,
+                        "status": execution_status,
+                        "duration_ms": duration_ms,
+                    }
+                )
         visited += 1
         active_branch = None
         if node_id in reachable and node_type == "condition":
@@ -1318,197 +1340,61 @@ def render_jinja_template(config: dict[str, Any], context: dict[str, Any]) -> st
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Template rendering failed: {exc}") from exc
 
 
-def first_non_null(values: list[Any]) -> Any:
-    return next((value for value in values if value is not None), None)
-
-
-def empty_assignment_value(value_type: str) -> Any:
-    return {"String": "", "Number": 0, "Boolean": False, "Object": {}, "Array": []}.get(value_type)
-
-
-def coerce_assignment_value(value: Any, value_type: str) -> Any:
-    if value_type == "Any" or value is None:
-        return value
-    if value_type == "String":
-        return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value)
-    if value_type == "Number":
-        try:
-            number = float(value)
-            return int(number) if number.is_integer() else number
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Variable value is not a number") from exc
-    if value_type == "Boolean":
-        if isinstance(value, bool):
-            return value
-        normalized = str(value).strip().casefold()
-        if normalized in {"true", "1", "yes", "on"}:
-            return True
-        if normalized in {"false", "0", "no", "off", ""}:
-            return False
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Variable value is not a boolean")
-    if value_type in {"Object", "Array"}:
-        parsed = json.loads(value) if isinstance(value, str) else value
-        expected = dict if value_type == "Object" else list
-        if not isinstance(parsed, expected):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Variable value is not an {value_type.lower()}")
-        return parsed
-    return value
-
-
-def read_object_path(value: Any, path: str) -> Any:
-    current = value
-    for part in filter(None, path.split(".")):
-        if isinstance(current, dict):
-            current = current.get(part)
-        elif isinstance(current, list) and part.isdigit() and int(part) < len(current):
-            current = current[int(part)]
-        else:
-            return None
-    return current
-
-
-def list_item_matches(item: Any, filter_config: dict[str, Any]) -> bool:
-    field = str(filter_config.get("field", "")).strip()
-    left = read_object_path(item, field) if field else item
-    return evaluate_condition_clause({
-        "variable": left,
-        "operator": filter_config.get("operator", "equals"),
-        "value": filter_config.get("value"),
-    })
-
-
-def sortable_value(value: Any) -> tuple[int, Any]:
-    if value is None:
-        return (2, "")
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return (0, value)
-    if isinstance(value, (dict, list)):
-        return (1, json.dumps(value, ensure_ascii=False, sort_keys=True))
-    return (1, str(value).casefold())
-
-
-def stable_item_key(value: Any) -> str:
-    try:
-        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    except (TypeError, ValueError):
-        return repr(value)
-
-
-def extract_structured_parameters(config: dict[str, Any]) -> dict[str, Any]:
-    source = config.get("source")
-    parsed: dict[str, Any] = source if isinstance(source, dict) else {}
-    if isinstance(source, str):
-        try:
-            candidate = json.loads(source)
-            if isinstance(candidate, dict):
-                parsed = candidate
-        except json.JSONDecodeError:
-            parsed = {}
-    output: dict[str, Any] = {}
-    for field in config.get("fields", []):
-        name = str(field.get("name", ""))
-        value = read_object_path(parsed, name) if parsed else None
-        if value is None and isinstance(source, str):
-            match = re.search(rf"(?im)^\s*{re.escape(name)}\s*[:=：]\s*(.+?)\s*$", source)
-            value = match.group(1) if match else None
-        output[name] = coerce_assignment_value(value, field.get("type", "String")) if value is not None else None
-    return output
-
-
 def execute_node(node: dict[str, Any], context: dict[str, Any]) -> Any:
     """Execute one node against an explicit context for graph and preview runs."""
     node_type = node.get("type")
     raw_config = node.get("data", {}).get("config", {})
     config = resolve_value(raw_config, context)
-    if node_type == "start":
-        return deepcopy(context.get("inputs", {}))
-    if node_type == "end":
-        outputs = config.get("outputs", context)
-        if isinstance(outputs, list):
-            return {str(output["name"]): output.get("value") for output in outputs}
-        return outputs
+    event_callback = context.get("__event_callback__")
+    if callable(event_callback) and node_type in {"llm", "agent", "extract"}:
+        config["_stream_callback"] = lambda delta: event_callback(
+            {"type": "token", "node_id": str(node.get("id")), "delta": delta}
+        )
+    registered, registered_output = execute_registered_node(str(node_type), config, context)
+    if registered:
+        return registered_output
     if node_type == "template":
         return {"text": render_jinja_template(raw_config, context)}
     if node_type == "code":
         return execute_code_node(config)
-    if node_type == "variable":
-        if not isinstance(config.get("assignments"), list):
-            return config.get("values", {})
-        result = deepcopy(config.get("values", {})) if isinstance(config.get("values"), dict) else {}
-        for assignment in config["assignments"]:
-            name = str(assignment.get("name", ""))
-            operation = assignment.get("operation", "overwrite")
-            value = coerce_assignment_value(assignment.get("value"), assignment.get("type", "Any"))
-            if operation == "clear":
-                result[name] = empty_assignment_value(assignment.get("type", "Any"))
-            elif operation == "append":
-                current = result.get(name, "")
-                result[name] = [*current, value] if isinstance(current, list) else f"{current}{value}"
-            elif operation == "extend":
-                current = result.get(name, [])
-                addition = value if isinstance(value, list) else [value]
-                result[name] = [*(current if isinstance(current, list) else [current]), *addition]
-            else:
-                result[name] = value
-        return result
-    if node_type == "json":
-        raw = config.get("value", {})
-        return json.loads(raw) if isinstance(raw, str) else raw
-    if node_type == "aggregate":
-        if config.get("group_enabled", False):
-            grouped = {
-                group["name"]: first_non_null(group.get("variables", []))
-                for group in config.get("groups", [])
+    if node_type == "script":
+        runtime = raw_config.get("_script_runtime")
+        if not isinstance(runtime, dict):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "Script runtime was not resolved",
+            )
+        script_inputs = config.get("inputs", {})
+        if isinstance(script_inputs, list):
+            script_inputs = {
+                str(item.get("name")): item.get("value")
+                for item in script_inputs
+                if isinstance(item, dict) and item.get("name")
             }
-            return {**grouped, "output": grouped}
-        values = config.get("variables", [])
-        return {"output": first_non_null(values), "values": values}
-    if node_type == "wait":
-        return {"completed": True, "mode": config.get("mode", "all")}
-    if node_type == "list":
-        source = config.get("source", [])
-        if not isinstance(source, list):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "List node source must be an array")
-        operation = config.get("operation", "filter")
-        if any(key in config for key in ("filter", "nth", "limit", "sort", "unique")):
-            items = list(source)
-            filter_config = config.get("filter", {})
-            if filter_config.get("enabled"):
-                items = [item for item in items if list_item_matches(item, filter_config)]
-            if config.get("sort", {}).get("enabled"):
-                sort_config = config["sort"]
-                key_name = str(sort_config.get("key", "")).strip()
-                items = sorted(items, key=lambda item: sortable_value(read_object_path(item, key_name) if key_name else item), reverse=sort_config.get("order") == "desc")
-            if config.get("unique"):
-                seen: set[str] = set()
-                items = [item for item in items if not (stable_item_key(item) in seen or seen.add(stable_item_key(item)))]
-            if config.get("limit", {}).get("enabled"):
-                items = items[: int(config["limit"].get("count", 10))]
-            item = None
-            if config.get("nth", {}).get("enabled"):
-                index = int(config["nth"].get("index", 1)) - 1
-                item = items[index] if 0 <= index < len(items) else None
-            return {"items": items, "item": item}
-        if operation == "unique":
-            seen: set[str] = set()
-            return {"items": [item for item in source if not (stable_item_key(item) in seen or seen.add(stable_item_key(item)))], "item": None}
-        if operation == "sort":
-            return {"items": sorted(source, key=sortable_value), "item": None}
-        if operation == "slice":
-            return {"items": source[int(config.get("start", 0)) : int(config.get("end", len(source)))], "item": None}
-        return {"items": source, "item": None}
+        if not isinstance(script_inputs, dict):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Script inputs must be an object")
+        return execute_script_runtime(runtime, script_inputs)
     if node_type == "llm":
         return execute_llm(require_model_runtime(config, context), config)
     if node_type == "agent":
-        return execute_agent(require_model_runtime(config, context), config)
+        raw_tools = {
+            str(tool.get("id")): tool
+            for tool in raw_config.get("tools", [])
+            if isinstance(tool, dict)
+        }
+        for tool in config.get("tools", []):
+            source = raw_tools.get(str(tool.get("id")), {})
+            if isinstance(source.get("_script_runtime"), dict):
+                tool["_script_runtime"] = source["_script_runtime"]
+        return execute_agent(
+            require_model_runtime(config, context),
+            config,
+            execute_agent_tool,
+        )
     if node_type == "extract":
         if config.get("provider_id"):
             return execute_extractor(require_model_runtime(config, context), config)
         return extract_structured_parameters(config)
-    if node_type == "condition":
-        return evaluate_condition(config)
-    if node_type == "classifier":
-        return evaluate_classifier(config)
     if node_type == "http":
         return execute_http_request(config)
     if node_type == "subworkflow":
@@ -1583,24 +1469,28 @@ def require_model_runtime(
     return runtime
 
 
-def execute_code_node(config: dict[str, Any]) -> dict[str, Any]:
-    validate_code_config(config)
-    code_inputs = {str(item["name"]): item.get("value") for item in config.get("inputs", [])}
-    timeout_seconds = int(config.get("timeout_seconds", 30))
+def execute_sandbox(
+    source: str,
+    entrypoint: str,
+    inputs: dict[str, Any],
+    timeout_seconds: int = 30,
+    memory_mb: int = 256,
+    network_enabled: bool = False,
+) -> dict[str, Any]:
     settings = get_settings()
     try:
         with httpx.Client(timeout=timeout_seconds + 5) as client:
             response = client.post(
                 f"{settings.sandbox_url}/execute",
                 json={
-                    "source": config["source"],
-                    "entrypoint": config.get("entrypoint", "main"),
-                    "inputs": code_inputs,
+                    "source": source,
+                    "entrypoint": entrypoint,
+                    "inputs": inputs,
                     "timeout_seconds": timeout_seconds,
-                    "memory_mb": int(config.get("memory_mb", 256)),
-                    "network_enabled": bool(config.get("network_enabled", False)),
+                    "memory_mb": memory_mb,
+                    "network_enabled": network_enabled,
                 },
-                headers={"X-Sandbox-Token": settings.app_secret_key},
+                headers={"X-Sandbox-Token": settings.sandbox_shared_secret},
             )
             response.raise_for_status()
             result = response.json()
@@ -1612,65 +1502,52 @@ def execute_code_node(config: dict[str, Any]) -> dict[str, Any]:
     sandbox_outputs = result.get("outputs")
     if not isinstance(sandbox_outputs, dict):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Python entrypoint must return an object")
+    sandbox_outputs["_logs"] = result.get("logs", [])
+    sandbox_outputs["_elapsed_ms"] = result.get("elapsed_ms", 0)
+    return sandbox_outputs
+
+
+def execute_code_node(config: dict[str, Any]) -> dict[str, Any]:
+    validate_code_config(config)
+    code_inputs = {str(item["name"]): item.get("value") for item in config.get("inputs", [])}
+    sandbox_outputs = execute_sandbox(
+        config["source"],
+        config.get("entrypoint", "main"),
+        code_inputs,
+        int(config.get("timeout_seconds", 30)),
+        int(config.get("memory_mb", 256)),
+        bool(config.get("network_enabled", False)),
+    )
     output: dict[str, Any] = {}
     for declared in config.get("outputs", []):
         name = str(declared["name"])
         value = sandbox_outputs.get(name)
         output[name] = coerce_assignment_value(value, declared.get("type", "Any")) if value is not None else None
-    output["_logs"] = result.get("logs", [])
-    output["_elapsed_ms"] = result.get("elapsed_ms", 0)
+    output["_logs"] = sandbox_outputs.get("_logs", [])
+    output["_elapsed_ms"] = sandbox_outputs.get("_elapsed_ms", 0)
     return output
 
 
-def evaluate_condition(config: dict[str, Any]) -> dict[str, Any]:
-    conditions = config.get("conditions")
-    if isinstance(conditions, list) and conditions:
-        results = [evaluate_condition_clause(clause) for clause in conditions]
-        result = any(results) if config.get("logical_operator", "and") == "or" else all(results)
-        return {"result": result, "branch": "true" if result else "false", "clauses": results}
-    result = evaluate_legacy_condition(config.get("expression"))
-    return {"result": result, "branch": "true" if result else "false", "clauses": [result]}
+def execute_script_runtime(runtime: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    input_schema = runtime.get("input_schema", {})
+    if isinstance(input_schema, dict) and input_schema:
+        validate_inputs(input_schema, inputs)
+    outputs = execute_sandbox(
+        str(runtime.get("source", "")),
+        str(runtime.get("entrypoint", "main")),
+        inputs,
+    )
+    clean_outputs = {key: value for key, value in outputs.items() if not key.startswith("_")}
+    output_schema = runtime.get("output_schema", {})
+    if isinstance(output_schema, dict) and output_schema:
+        validate_inputs(output_schema, clean_outputs)
+    return outputs
 
 
-def evaluate_classifier(config: dict[str, Any]) -> dict[str, Any]:
-    """Choose a stable category for local previews and deterministic runs.
-
-    Category handles are deliberately independent from labels so renaming a
-    category does not break published connections. The final category is the
-    fallback when no configured term matches; a future model executor can emit
-    the same branch contract without changing graph routing.
-    """
-    source = str(config.get("input") or "").strip()
-    normalized_source = source.casefold()
-    categories = config.get("categories", [])
-    best_category: dict[str, Any] | None = None
-    best_score = 0
-    matched_terms: list[str] = []
-    for category in categories:
-        name = str(category.get("name") or "").strip()
-        description_terms = [
-            term.strip()
-            for term in re.split(r"[,，;；。.!！?？\s]+", str(category.get("description") or ""))
-            if len(term.strip()) >= 2
-        ]
-        terms = [name, *category.get("keywords", []), *description_terms]
-        matches = [term for term in terms if term and term.casefold() in normalized_source]
-        exact = bool(name and name.casefold() == normalized_source)
-        score = (1000 if exact else 0) + sum(max(1, len(term)) for term in matches)
-        if score > best_score:
-            best_category, best_score, matched_terms = category, score, matches
-    fallback = best_category is None
-    if fallback:
-        best_category = categories[-1]
-    category_id = str(best_category["id"])
-    return {
-        "class_id": category_id,
-        "class_name": str(best_category["name"]),
-        "branch": f"category:{category_id}",
-        "confidence": 0.0 if fallback else min(1.0, best_score / 1000 if best_score >= 1000 else best_score / 20),
-        "matched_terms": matched_terms,
-        "fallback": fallback,
-    }
+def execute_agent_tool(tool: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
+    if tool.get("type") != "script" or not isinstance(tool.get("_script_runtime"), dict):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Agent tool is not executable")
+    return execute_script_runtime(tool["_script_runtime"], arguments)
 
 
 def execute_http_request(
@@ -1709,20 +1586,29 @@ def execute_http_request(
             follow_redirects=bool(config.get("follow_redirects", False)),
             transport=transport,
         ) as client:
-            response = client.request(method, str(config["url"]), **request_kwargs)
+            with client.stream(method, str(config["url"]), **request_kwargs) as response:
+                max_response_bytes = int(config.get("max_response_bytes", 2_000_000))
+                chunks: list[bytes] = []
+                response_size = 0
+                for chunk in response.iter_bytes():
+                    response_size += len(chunk)
+                    if response_size > max_response_bytes:
+                        raise HTTPException(
+                            status.HTTP_502_BAD_GATEWAY,
+                            "HTTP response exceeded the configured size limit",
+                        )
+                    chunks.append(chunk)
+                response_body_bytes = b"".join(chunks)
     except httpx.HTTPError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"HTTP request failed: {exc}") from exc
-    max_response_bytes = int(config.get("max_response_bytes", 2_000_000))
-    if len(response.content) > max_response_bytes:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "HTTP response exceeded the configured size limit")
     content_type = response.headers.get("content-type", "")
     if "json" in content_type.lower():
         try:
-            response_body: Any = response.json()
-        except ValueError:
-            response_body = response.text
+            response_body: Any = json.loads(response_body_bytes)
+        except (UnicodeDecodeError, ValueError):
+            response_body = response_body_bytes.decode(response.encoding or "utf-8", errors="replace")
     else:
-        response_body = response.text
+        response_body = response_body_bytes.decode(response.encoding or "utf-8", errors="replace")
     safe_url = response.url.copy_with()
     if auth_config.get("type") == "api_key" and auth_config.get("location", "header") == "query":
         safe_url = safe_url.copy_set_param(str(auth_config["key"]), "[REDACTED]")
@@ -1739,70 +1625,6 @@ def execute_http_request(
         "elapsed_ms": max(0, round((datetime.now(UTC) - started).total_seconds() * 1000, 2)),
         "ok": response.is_success,
     }
-
-
-def evaluate_condition_clause(clause: dict[str, Any]) -> bool:
-    left, right, operator = clause.get("variable"), clause.get("value"), clause.get("operator")
-    if operator == "is_empty":
-        return left in (None, "", [], {})
-    if operator == "is_not_empty":
-        return left not in (None, "", [], {})
-    if operator == "equals":
-        return left == right or str(left) == str(right)
-    if operator == "not_equals":
-        return not evaluate_condition_clause({**clause, "operator": "equals"})
-    if operator in {"contains", "not_contains"}:
-        contained = right in left if isinstance(left, (list, tuple, set, dict)) else str(right) in str(left or "")
-        return not contained if operator == "not_contains" else contained
-    if operator == "starts_with":
-        return str(left or "").startswith(str(right))
-    if operator == "ends_with":
-        return str(left or "").endswith(str(right))
-    if operator == "in":
-        choices = right if isinstance(right, list) else [item.strip() for item in str(right).split(",")]
-        return left in choices or str(left) in {str(item) for item in choices}
-    try:
-        left_number, right_number = float(left), float(right)
-    except (TypeError, ValueError):
-        return False
-    return {
-        "greater_than": left_number > right_number,
-        "less_than": left_number < right_number,
-        "greater_or_equal": left_number >= right_number,
-        "less_or_equal": left_number <= right_number,
-    }.get(str(operator), False)
-
-
-def evaluate_legacy_condition(expression: Any) -> bool:
-    if isinstance(expression, bool):
-        return expression
-    text = str(expression or "").strip()
-    if text.lower() in {"true", "yes", "1"}:
-        return True
-    if text.lower() in {"false", "no", "0", "", "none", "null"}:
-        return False
-    match = re.fullmatch(r"\s*(.*?)\s*(==|!=|>=|<=|>|<)\s*(.*?)\s*", text)
-    if not match:
-        return bool(text)
-    left, operator, right = match.groups()
-    left, right = parse_condition_literal(left), parse_condition_literal(right)
-    if operator == "==":
-        return left == right or str(left) == str(right)
-    if operator == "!=":
-        return not (left == right or str(left) == str(right))
-    try:
-        left, right = float(left), float(right)
-    except (TypeError, ValueError):
-        return False
-    return {">": left > right, "<": left < right, ">=": left >= right, "<=": left <= right}[operator]
-
-
-def parse_condition_literal(value: str) -> Any:
-    stripped = value.strip()
-    try:
-        return json.loads(stripped.lower() if stripped.lower() in {"true", "false", "null"} else stripped)
-    except json.JSONDecodeError:
-        return stripped.strip("'\"")
 
 
 def execute_node_preview(

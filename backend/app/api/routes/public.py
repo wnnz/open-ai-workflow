@@ -1,9 +1,8 @@
-from copy import deepcopy
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, File, Header, HTTPException, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
-from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import DbSession
 from app.core.config import get_settings
@@ -12,15 +11,15 @@ from app.models.entities import (
     ApiKey,
     StoredFile,
     Workflow,
-    WorkflowApproval,
     WorkflowRun,
     WorkflowVersion,
 )
 from app.schemas.workflow import RunIn
-from app.services.model_providers import load_model_provider_runtimes
-from app.services.storage import put
-from app.services.workflow_engine import WorkflowPause, execute_graph
-from app.services.workflow_environment import build_system_variables, load_workflow_environment
+from app.services.run_events import stream_run_events
+from app.services.script_runtime import hydrate_script_resources
+from app.services.task_queue import enqueue_workflow_run
+from app.services.uploads import store_upload
+from app.services.workflow_engine import validate_run_inputs
 
 router = APIRouter(prefix="/apps", tags=["published apps"])
 
@@ -94,63 +93,23 @@ async def execute_published(
 ) -> dict:
     workflow, version = await get_published(db, app_slug)
     await authorize(db, workflow, authorization)
+    execution_graph = await hydrate_script_resources(db, version.graph, version.resolved_references)
+    validate_run_inputs(execution_graph, payload.inputs)
     run = WorkflowRun(
         workspace_id=workflow.workspace_id,
         workflow_id=workflow.id,
         workflow_version_id=version.id,
-        status="running",
+        status="pending",
         triggered_by=triggered_by,
+        trigger_user_id=payload.user or None,
         inputs=payload.inputs,
+        execution_graph=execution_graph,
     )
     db.add(run)
     await db.flush()
-    try:
-        environment = await load_workflow_environment(db, workflow.workspace_id, workflow.id)
-        model_providers = await load_model_provider_runtimes(db, workflow.workspace_id)
-        system = build_system_variables(workflow_id=workflow.id, run_id=run.id, user_id=payload.user)
-        outputs, trace = execute_graph(
-            version.graph,
-            payload.inputs,
-            environment=environment,
-            system=system,
-            model_providers=model_providers,
-        )
-        run.status = "succeeded"
-        run.outputs = outputs
-        run.trace = trace
-    except WorkflowPause as pause:
-        approval = WorkflowApproval(
-            workspace_id=workflow.workspace_id,
-            workflow_id=workflow.id,
-            run_id=run.id,
-            node_id=pause.node_id,
-            request=pause.request,
-            graph=deepcopy(version.graph),
-            resume_state=pause.resume_state,
-            expires_at=datetime.now(UTC) + timedelta(minutes=int(pause.request.get("timeout_minutes", 4320))),
-        )
-        db.add(approval)
-        await db.flush()
-        run.status = "waiting"
-        run.trace = [
-            *pause.resume_state.get("trace", []),
-            {"node_id": pause.node_id, "node_type": "human", "status": "waiting", "output": {"approval_id": approval.id}, "error": None, "attempts": 0, "error_handled": False, "started_at": datetime.now(UTC).isoformat(), "finished_at": None},
-        ]
-    except ValueError as exc:
-        run.status = "failed"
-        run.error = str(exc)
-        run.finished_at = datetime.now(UTC)
-        await db.commit()
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
-    except Exception as exc:
-        run.status = "failed"
-        run.error = str(exc)
-        run.finished_at = datetime.now(UTC)
-        await db.commit()
-        raise
-    else:
-        run.finished_at = datetime.now(UTC)
     await db.commit()
+    if await enqueue_workflow_run(run.id):
+        await db.refresh(run)
     return {"run_id": run.id, "status": run.status, "version": version.version, "outputs": run.outputs, "trace": run.trace}
 
 
@@ -178,6 +137,49 @@ async def webhook_published(
     return await execute_published(app_slug, payload, db, authorization, "webhook")
 
 
+@router.get("/{app_slug}/runs/{run_id}")
+async def get_published_run(
+    app_slug: str,
+    run_id: str,
+    db: DbSession,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    workflow, version = await get_published(db, app_slug)
+    await authorize(db, workflow, authorization)
+    run = await db.get(WorkflowRun, run_id)
+    if not run or run.workflow_id != workflow.id or run.workflow_version_id != version.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Workflow run not found")
+    return {
+        "run_id": run.id,
+        "status": run.status,
+        "version": version.version,
+        "outputs": run.outputs,
+        "trace": run.trace,
+        "error": run.error,
+        "created_at": run.created_at,
+        "finished_at": run.finished_at,
+    }
+
+
+@router.get("/{app_slug}/runs/{run_id}/events")
+async def get_published_run_events(
+    app_slug: str,
+    run_id: str,
+    db: DbSession,
+    authorization: str | None = Header(default=None),
+) -> StreamingResponse:
+    workflow, version = await get_published(db, app_slug)
+    await authorize(db, workflow, authorization)
+    run = await db.get(WorkflowRun, run_id)
+    if not run or run.workflow_id != workflow.id or run.workflow_version_id != version.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Workflow run not found")
+    return StreamingResponse(
+        stream_run_events(run.id, run.status),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.post("/{app_slug}/files", status_code=status.HTTP_201_CREATED)
 async def upload_published_file(
     app_slug: str,
@@ -187,22 +189,15 @@ async def upload_published_file(
 ) -> dict:
     workflow, _ = await get_published(db, app_slug)
     await authorize(db, workflow, authorization)
-    content = await file.read()
-    if len(content) > get_settings().max_upload_bytes:
-        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "File too large")
-    key, digest = await run_in_threadpool(
-        put,
-        workflow.workspace_id,
-        file.filename or "file",
-        file.content_type or "application/octet-stream",
-        content,
+    key, digest, size = await store_upload(
+        workflow.workspace_id, file, get_settings().max_upload_bytes
     )
     stored = StoredFile(
         workspace_id=workflow.workspace_id,
         object_key=key,
         filename=file.filename or "file",
         content_type=file.content_type or "application/octet-stream",
-        size=len(content),
+        size=size,
         sha256=digest,
         created_by=workflow.created_by,
     )

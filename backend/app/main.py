@@ -12,6 +12,8 @@ from app.api.routes import (
     workspaces,
 )
 from app.core.config import get_settings
+from app.middleware.body_limit import RequestBodyLimitMiddleware
+from app.observability import install_observability
 
 settings = get_settings()
 app = FastAPI(
@@ -19,6 +21,8 @@ app = FastAPI(
     version="0.1.0",
     description="Multi-workspace AI workflow and script management platform",
 )
+install_observability(app)
+app.add_middleware(RequestBodyLimitMiddleware, max_bytes=settings.max_request_body_bytes)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,

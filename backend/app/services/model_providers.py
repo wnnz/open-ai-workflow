@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
+from asyncio import sleep
 from copy import deepcopy
 from time import perf_counter
 from typing import Any
@@ -133,6 +134,32 @@ def inference_request(api_mode: str, model: str) -> tuple[str, dict[str, Any]]:
     }
 
 
+async def request_with_retries(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    max_retries: int,
+    **kwargs: Any,
+) -> httpx.Response:
+    last_error: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = await client.request(method, url, **kwargs)
+            response.raise_for_status()
+            return response
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            last_error = exc
+        except httpx.HTTPStatusError as exc:
+            last_error = exc
+            if exc.response.status_code < 500 and exc.response.status_code != 429:
+                raise
+        if attempt < max_retries:
+            await sleep(min(2**attempt, 8))
+    assert last_error is not None
+    raise last_error
+
+
 async def fetch_provider_models(
     *,
     base_url: str,
@@ -153,11 +180,13 @@ async def fetch_provider_models(
             follow_redirects=False,
             transport=transport,
         ) as client:
-            response = await client.get(
+            response = await request_with_retries(
+                client,
+                "GET",
                 f"{normalized_url}/models",
+                max_retries=int(normalized_config["max_retries"]),
                 headers=provider_headers(api_key, normalized_config),
             )
-            response.raise_for_status()
             models = extract_model_ids(response.json())[:200]
     except httpx.TimeoutException as exc:
         raise HTTPException(status.HTTP_504_GATEWAY_TIMEOUT, "Model catalog request timed out") from exc
@@ -200,15 +229,26 @@ async def test_provider_connection(
             transport=transport,
         ) as client:
             try:
-                response = await client.get(f"{normalized_url}/models", headers=headers)
-                response.raise_for_status()
+                response = await request_with_retries(
+                    client,
+                    "GET",
+                    f"{normalized_url}/models",
+                    max_retries=int(normalized_config["max_retries"]),
+                    headers=headers,
+                )
                 models = extract_model_ids(response.json())[:200]
             except (httpx.HTTPError, ValueError) as exc:
                 catalog_error = str(exc)
             if verify_inference or catalog_error:
                 path, body = inference_request(normalized_config["api_mode"], default_model.strip())
-                response = await client.post(f"{normalized_url}{path}", headers=headers, json=body)
-                response.raise_for_status()
+                response = await request_with_retries(
+                    client,
+                    "POST",
+                    f"{normalized_url}{path}",
+                    max_retries=int(normalized_config["max_retries"]),
+                    headers=headers,
+                    json=body,
+                )
                 inference_verified = True
     except httpx.TimeoutException as exc:
         raise HTTPException(status.HTTP_504_GATEWAY_TIMEOUT, "Model connection timed out") from exc

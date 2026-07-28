@@ -13,7 +13,13 @@ export type WorkflowEdgeLike = {
   markerStart?: string
   markerEnd?: string
 }
-export type WorkflowConnectionLike = { id?: string; source?: string | null; target?: string | null }
+export type WorkflowConnectionLike = {
+  id?: string
+  source?: string | null
+  target?: string | null
+  sourceHandle?: string | null
+  targetHandle?: string | null
+}
 export type WorkflowValidationIssue = {
   code: string
   nodeId?: string
@@ -154,7 +160,12 @@ export function isConnectionAllowed(
   if (nodeType(nodes.find(node => node.id === source)) === 'end') return false
   if (nodeType(nodes.find(node => node.id === target)) === 'start') return false
   const existingConnection = Boolean(connection.id && edges.some(edge => edge.id === connection.id))
-  if (!existingConnection && edges.some(edge => edge.source === source && edge.target === target)) return false
+  if (!existingConnection && edges.some(edge => (
+    edge.source === source
+    && edge.target === target
+    && String(edge.sourceHandle || '') === String(connection.sourceHandle || '')
+    && String(edge.targetHandle || '') === String(connection.targetHandle || '')
+  ))) return false
   const sourceNode = nodes.find(node => node.id === source)
   const targetNode = nodes.find(node => node.id === target)
   if ((sourceNode?.parentNode || null) !== (targetNode?.parentNode || null)) return false

@@ -1,6 +1,15 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import AdminUsersPage from '@/pages/AdminUsersPage.vue'; import LoginPage from '@/pages/LoginPage.vue'; import MembersPage from '@/pages/MembersPage.vue'; import ModelsPage from '@/pages/ModelsPage.vue'; import NewWorkspacePage from '@/pages/NewWorkspacePage.vue'; import PublicAppPage from '@/pages/PublicAppPage.vue'; import ScriptsPage from '@/pages/ScriptsPage.vue'; import SettingsPage from '@/pages/SettingsPage.vue'; import StudioPage from '@/pages/StudioPage.vue'; import WorkflowDesignerPage from '@/pages/WorkflowDesignerPage.vue'
+const AdminUsersPage = () => import('@/pages/AdminUsersPage.vue')
+const LoginPage = () => import('@/pages/LoginPage.vue')
+const MembersPage = () => import('@/pages/MembersPage.vue')
+const ModelsPage = () => import('@/pages/ModelsPage.vue')
+const NewWorkspacePage = () => import('@/pages/NewWorkspacePage.vue')
+const PublicAppPage = () => import('@/pages/PublicAppPage.vue')
+const ScriptsPage = () => import('@/pages/ScriptsPage.vue')
+const SettingsPage = () => import('@/pages/SettingsPage.vue')
+const StudioPage = () => import('@/pages/StudioPage.vue')
+const WorkflowDesignerPage = () => import('@/pages/WorkflowDesignerPage.vue')
 
 const router = createRouter({ history: createWebHistory(), routes: [
   { path: '/login', component: LoginPage, meta: { public: true } },

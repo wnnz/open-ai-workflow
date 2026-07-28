@@ -13,15 +13,21 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./openworkflow.db"
     redis_url: str = "redis://localhost:6379/0"
     minio_endpoint: str = "localhost:9000"
-    minio_access_key: str = "openworkflow"
-    minio_secret_key: str = "replace-me"
+    minio_access_key: str = ""
+    minio_secret_key: str = ""
     minio_bucket: str = "openworkflow"
     minio_secure: bool = False
     access_token_minutes: int = 720
     cors_origins: str = "http://localhost:5173"
     sandbox_url: str = "http://localhost:8081"
+    sandbox_shared_secret: str = ""
     document_worker_url: str = "http://localhost:8082"
     max_upload_bytes: int = Field(default=50 * 1024 * 1024, ge=1024)
+    max_request_body_bytes: int = Field(default=50 * 1024 * 1024, ge=1024)
+    log_level: str = "INFO"
+    otel_exporter_otlp_endpoint: str = ""
+    alert_webhook_url: str = ""
+    task_always_eager: bool = False
 
     @property
     def cors_origin_list(self) -> list[str]:
