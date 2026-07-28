@@ -25,6 +25,7 @@ async def _load_version(
 def _runtime(version: ScriptVersion) -> dict[str, Any]:
     return {
         "source": version.source_code,
+        "source_files": version.source_files or {"main.py": version.source_code},
         "entrypoint": version.entrypoint,
         "input_schema": version.input_schema,
         "output_schema": version.output_schema,

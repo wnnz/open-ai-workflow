@@ -124,6 +124,7 @@ class ScriptVersion(Base):
     version: Mapped[int] = mapped_column(Integer)
     source_type: Mapped[str] = mapped_column(String(20), default="python")
     source_code: Mapped[str] = mapped_column(Text)
+    source_files: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
     entrypoint: Mapped[str] = mapped_column(String(255), default="main")
     input_schema: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     output_schema: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)

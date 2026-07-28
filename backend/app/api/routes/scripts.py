@@ -1,31 +1,72 @@
-import io
+import ast
+import difflib
+import stat
 import zipfile
 from datetime import UTC, datetime
+from pathlib import PurePosixPath
+from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
-from sqlalchemy import select
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import StreamingResponse
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentUser, DbSession
+from app.celery_app import celery
 from app.core.config import get_settings
 from app.models.entities import Script, ScriptVersion
 from app.schemas.common import MessageOut
 from app.schemas.script import (
     ScriptCreate,
+    ScriptDiffOut,
+    ScriptDraftTestIn,
     ScriptOut,
-    ScriptTestIn,
-    ScriptTestOut,
+    ScriptRestoreIn,
+    ScriptTemplateOut,
+    ScriptTestTaskOut,
     ScriptUpdate,
     ScriptVersionOut,
+    ScriptVersionPage,
 )
-from app.services.scripts import validate_inputs, validate_script
+from app.services.script_templates import list_script_templates
+from app.services.script_test_events import (
+    cancel_script_test,
+    create_script_test,
+    get_script_test,
+    stream_script_test_events,
+)
+from app.services.scripts import (
+    MAX_SCRIPT_BUNDLE_BYTES,
+    MAX_SCRIPT_FILE_BYTES,
+    MAX_SCRIPT_FILES,
+    entrypoint_file,
+    normalize_source_files,
+    validate_inputs,
+    validate_script,
+)
 from app.services.workspaces import audit, require_role, slugify
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/scripts", tags=["scripts"])
 
 
-async def get_script(db: DbSession, workspace_id: str, script_id: str) -> Script:
-    script = await db.get(Script, script_id)
+async def commit_script(db: DbSession, conflict_message: str = "Script update conflict") -> None:
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, conflict_message) from exc
+
+
+async def get_script(
+    db: DbSession, workspace_id: str, script_id: str, *, for_update: bool = False
+) -> Script:
+    if for_update:
+        script = await db.scalar(
+            select(Script).where(Script.id == script_id).with_for_update()
+        )
+    else:
+        script = await db.get(Script, script_id)
     if not script or script.workspace_id != workspace_id or script.deleted_at is not None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Script not found")
     return script
@@ -47,13 +88,21 @@ async def create_script(
     workspace_id: str, payload: ScriptCreate, db: DbSession, user: CurrentUser
 ) -> Script:
     await require_role(db, workspace_id, user.id, "editor")
+    files = normalize_source_files(payload.source_code, payload.source_files)
     digest = validate_script(
-        payload.source_code, payload.entrypoint, payload.input_schema, payload.output_schema
+        payload.source_code,
+        payload.entrypoint,
+        payload.input_schema,
+        payload.output_schema,
+        files,
     )
+    slug = payload.slug or slugify(payload.name)
+    if await db.scalar(select(Script.id).where(Script.workspace_id == workspace_id, Script.slug == slug)):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Script name or slug already exists")
     script = Script(
         workspace_id=workspace_id,
         name=payload.name,
-        slug=payload.slug or slugify(payload.name),
+        slug=slug,
         description=payload.description,
         tags=payload.tags,
         latest_version=1,
@@ -67,6 +116,7 @@ async def create_script(
             script_id=script.id,
             version=1,
             source_code=payload.source_code,
+            source_files=files,
             entrypoint=payload.entrypoint,
             input_schema=payload.input_schema,
             output_schema=payload.output_schema,
@@ -76,9 +126,127 @@ async def create_script(
         )
     )
     db.add(audit(workspace_id, user.id, "script.created", "script", script.id))
-    await db.commit()
+    await commit_script(db, "Script name or slug already exists")
     await db.refresh(script)
     return script
+
+
+@router.get("/templates", response_model=list[ScriptTemplateOut])
+async def script_templates(
+    workspace_id: str, db: DbSession, user: CurrentUser
+) -> list[dict]:
+    await require_role(db, workspace_id, user.id)
+    return list_script_templates()
+
+
+async def build_test_payload(
+    db: DbSession, payload: ScriptDraftTestIn, script: Script | None = None
+) -> dict:
+    version = None
+    if script:
+        version_number = payload.version or script.latest_version
+        version = await db.scalar(
+            select(ScriptVersion).where(
+                ScriptVersion.script_id == script.id,
+                ScriptVersion.version == version_number,
+            )
+        )
+        if not version:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Script version not found")
+    has_draft = payload.source_code is not None or bool(payload.source_files)
+    if not has_draft and not version:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Draft source is required")
+    source = payload.source_code if payload.source_code is not None else (
+        version.source_code if version else ""
+    )
+    source_files = payload.source_files if has_draft else (version.source_files or {"main.py": source})
+    entrypoint = payload.entrypoint or (version.entrypoint if version else "main:main")
+    input_schema = payload.input_schema if payload.input_schema is not None else (
+        version.input_schema if version else {"type": "object"}
+    )
+    output_schema = payload.output_schema if payload.output_schema is not None else (
+        version.output_schema if version else {"type": "object"}
+    )
+    files = normalize_source_files(source, source_files)
+    validate_script(source, entrypoint, input_schema, output_schema, files)
+    validate_inputs(input_schema, payload.inputs)
+    return {
+        "source": source,
+        "source_files": files,
+        "entrypoint": entrypoint,
+        "input_schema": input_schema,
+        "output_schema": output_schema,
+        "inputs": payload.inputs,
+        "timeout_seconds": payload.timeout_seconds,
+        "memory_mb": payload.memory_mb,
+        "network_enabled": payload.network_enabled,
+    }
+
+
+async def enqueue_script_test(
+    workspace_id: str,
+    script_id: str | None,
+    task_payload: dict,
+) -> ScriptTestTaskOut:
+    task_id = str(uuid4())
+    create_script_test(task_id, workspace_id, script_id, task_payload)
+    celery.send_task("script.test", args=[task_id], task_id=task_id)
+    return ScriptTestTaskOut(task_id=task_id, status="pending")
+
+
+@router.post("/test", response_model=ScriptTestTaskOut, status_code=status.HTTP_202_ACCEPTED)
+async def test_script_draft(
+    workspace_id: str, payload: ScriptDraftTestIn, db: DbSession, user: CurrentUser
+) -> ScriptTestTaskOut:
+    await require_role(db, workspace_id, user.id, "editor")
+    return await enqueue_script_test(workspace_id, None, await build_test_payload(db, payload))
+
+
+def require_test(workspace_id: str, task_id: str) -> dict:
+    task = get_script_test(task_id)
+    if not task or task.get("workspace_id") != workspace_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Script test not found")
+    return task
+
+
+@router.get("/tests/{task_id}")
+async def read_script_test(
+    workspace_id: str, task_id: str, db: DbSession, user: CurrentUser
+) -> dict:
+    await require_role(db, workspace_id, user.id)
+    return require_test(workspace_id, task_id)
+
+
+@router.get("/tests/{task_id}/events")
+async def script_test_events(
+    workspace_id: str, task_id: str, db: DbSession, user: CurrentUser
+) -> StreamingResponse:
+    await require_role(db, workspace_id, user.id)
+    require_test(workspace_id, task_id)
+    return StreamingResponse(
+        stream_script_test_events(task_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/tests/{task_id}/cancel")
+async def cancel_script_test_task(
+    workspace_id: str, task_id: str, db: DbSession, user: CurrentUser
+) -> dict[str, str]:
+    await require_role(db, workspace_id, user.id, "editor")
+    require_test(workspace_id, task_id)
+    cancel_script_test(task_id)
+    celery.control.revoke(task_id)
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(
+                f"{get_settings().sandbox_url}/executions/{task_id}/cancel",
+                headers={"X-Sandbox-Token": get_settings().sandbox_shared_secret},
+            )
+    except httpx.HTTPError:
+        pass
+    return {"status": "cancelled"}
 
 
 @router.post("/upload", response_model=ScriptOut, status_code=status.HTTP_201_CREATED)
@@ -91,31 +259,76 @@ async def upload_script(
     entrypoint: str = Form("main"),
 ) -> Script:
     await require_role(db, workspace_id, user.id, "editor")
-    content = await file.read()
-    if len(content) > get_settings().max_upload_bytes:
-        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "File too large")
     filename = (file.filename or "").lower()
     if filename.endswith(".py"):
-        source = content.decode("utf-8")
+        content = file.file.read(MAX_SCRIPT_FILE_BYTES + 1)
+        if len(content) > MAX_SCRIPT_FILE_BYTES:
+            raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Script file too large")
+        try:
+            source = content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Script must be UTF-8") from exc
+        source_files = {"main.py": source}
         source_type = "python"
     elif filename.endswith(".zip"):
         try:
-            archive = zipfile.ZipFile(io.BytesIO(content))
-            unsafe = [
-                item
-                for item in archive.infolist()
-                if item.filename.startswith(("/", "\\")) or ".." in item.filename.split("/")
-            ]
-            if unsafe:
-                raise ValueError("Unsafe archive path")
-            module = (
-                entrypoint.split(":", 1)[0].replace(".", "/") + ".py"
-                if ":" in entrypoint
-                else "main.py"
-            )
-            source = archive.read(module).decode("utf-8")
+            archive = zipfile.ZipFile(file.file)
+            if len(archive.infolist()) > MAX_SCRIPT_FILES * 4:
+                raise ValueError("Archive contains too many entries")
+            source_files = {}
+            total_size = 0
+            python_file_count = 0
+            for item in archive.infolist():
+                if item.is_dir():
+                    continue
+                raw_name = item.filename.replace("\\", "/")
+                path = PurePosixPath(raw_name)
+                mode = item.external_attr >> 16
+                if (
+                    path.is_absolute()
+                    or ".." in path.parts
+                    or (path.parts and ":" in path.parts[0])
+                    or stat.S_ISLNK(mode)
+                    or item.flag_bits & 0x1
+                ):
+                    raise ValueError(f"Unsafe archive entry: {item.filename}")
+                if path.suffix.lower() != ".py" or "__MACOSX" in path.parts:
+                    continue
+                python_file_count += 1
+                if python_file_count > MAX_SCRIPT_FILES:
+                    raise ValueError("Archive contains too many Python files")
+                if item.file_size > MAX_SCRIPT_FILE_BYTES:
+                    raise ValueError(f"Script file too large: {item.filename}")
+                if item.file_size and (not item.compress_size or item.file_size / item.compress_size > 100):
+                    raise ValueError(f"Suspicious compression ratio: {item.filename}")
+                total_size += item.file_size
+                if total_size > MAX_SCRIPT_BUNDLE_BYTES:
+                    raise ValueError("Script bundle too large")
+                source_files[str(path)] = archive.read(item).decode("utf-8")
+            if not source_files:
+                raise ValueError("Archive contains no Python files")
+            module, _ = entrypoint_file(entrypoint)
+            package_module = module.removesuffix(".py") + "/__init__.py"
+            entry_file = module if module in source_files else package_module
+            if entry_file not in source_files and entrypoint == "main:main":
+                candidates = []
+                for candidate_name, candidate_source in source_files.items():
+                    tree = ast.parse(candidate_source, filename=candidate_name)
+                    if any(
+                        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and node.name == "main"
+                        for node in tree.body
+                    ):
+                        candidates.append(candidate_name)
+                if len(candidates) == 1:
+                    entry_file = candidates[0]
+                    module_name = entry_file.removesuffix("/__init__.py").removesuffix(".py").replace("/", ".")
+                    entrypoint = f"{module_name}:main"
+            if entry_file not in source_files:
+                raise ValueError(f"Entrypoint module not found: {module}")
+            source = source_files[entry_file]
             source_type = "zip"
-        except (KeyError, ValueError, zipfile.BadZipFile, UnicodeDecodeError) as exc:
+        except (KeyError, ValueError, SyntaxError, zipfile.BadZipFile, UnicodeDecodeError) as exc:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT, f"Invalid script archive: {exc}"
             ) from exc
@@ -123,12 +336,16 @@ async def upload_script(
         raise HTTPException(
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Only .py and .zip are supported"
         )
-    function_name = entrypoint.split(":")[-1]
-    digest = validate_script(source, function_name, {"type": "object"}, {})
+    digest = validate_script(source, entrypoint, {"type": "object"}, {}, source_files)
+    script_slug = slugify(name)
+    if await db.scalar(
+        select(Script.id).where(Script.workspace_id == workspace_id, Script.slug == script_slug)
+    ):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Script name or slug already exists")
     script = Script(
         workspace_id=workspace_id,
         name=name,
-        slug=slugify(name),
+        slug=script_slug,
         latest_version=1,
         created_by=user.id,
     )
@@ -141,6 +358,7 @@ async def upload_script(
             version=1,
             source_type=source_type,
             source_code=source,
+            source_files=source_files,
             entrypoint=entrypoint,
             input_schema={"type": "object"},
             output_schema={},
@@ -159,7 +377,7 @@ async def upload_script(
             {"filename": file.filename},
         )
     )
-    await db.commit()
+    await commit_script(db, "Script name or slug already exists")
     await db.refresh(script)
     return script
 
@@ -172,23 +390,140 @@ async def read_script(
     return await get_script(db, workspace_id, script_id)
 
 
-@router.get("/{script_id}/versions", response_model=list[ScriptVersionOut])
+@router.get("/{script_id}/versions", response_model=ScriptVersionPage)
 async def list_versions(
-    workspace_id: str, script_id: str, db: DbSession, user: CurrentUser
-) -> list[ScriptVersion]:
+    workspace_id: str,
+    script_id: str,
+    db: DbSession,
+    user: CurrentUser,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> ScriptVersionPage:
     await require_role(db, workspace_id, user.id)
     await get_script(db, workspace_id, script_id)
-    return list(
-        (
-            await db.scalars(
-                select(ScriptVersion)
-                .where(
-                    ScriptVersion.script_id == script_id, ScriptVersion.workspace_id == workspace_id
-                )
-                .order_by(ScriptVersion.version.desc())
-            )
-        ).all()
+    condition = (
+        ScriptVersion.script_id == script_id,
+        ScriptVersion.workspace_id == workspace_id,
     )
+    total = int(await db.scalar(select(func.count()).select_from(ScriptVersion).where(*condition)) or 0)
+    rows = (
+        await db.execute(
+            select(
+                ScriptVersion.id,
+                ScriptVersion.script_id,
+                ScriptVersion.version,
+                ScriptVersion.source_type,
+                ScriptVersion.entrypoint,
+                ScriptVersion.content_hash,
+                ScriptVersion.change_note,
+                ScriptVersion.created_by,
+                ScriptVersion.created_at,
+            )
+            .where(*condition)
+            .order_by(ScriptVersion.version.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+    ).mappings().all()
+    return ScriptVersionPage(items=[dict(row) for row in rows], total=total, limit=limit, offset=offset)
+
+
+async def get_script_version(
+    db: DbSession, workspace_id: str, script_id: str, version_number: int
+) -> ScriptVersion:
+    version = await db.scalar(
+        select(ScriptVersion).where(
+            ScriptVersion.workspace_id == workspace_id,
+            ScriptVersion.script_id == script_id,
+            ScriptVersion.version == version_number,
+        )
+    )
+    if not version:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Script version not found")
+    return version
+
+
+@router.get("/{script_id}/versions/{version_number}", response_model=ScriptVersionOut)
+async def read_script_version(
+    workspace_id: str,
+    script_id: str,
+    version_number: int,
+    db: DbSession,
+    user: CurrentUser,
+) -> ScriptVersion:
+    await require_role(db, workspace_id, user.id)
+    await get_script(db, workspace_id, script_id)
+    return await get_script_version(db, workspace_id, script_id, version_number)
+
+
+def version_bundle_text(version: ScriptVersion) -> list[str]:
+    files = version.source_files or {"main.py": version.source_code}
+    lines: list[str] = []
+    for name in sorted(files):
+        lines.extend([f"# file: {name}\n", *files[name].splitlines(keepends=True)])
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] += "\n"
+    return lines
+
+
+@router.get("/{script_id}/diff", response_model=ScriptDiffOut)
+async def diff_script_versions(
+    workspace_id: str,
+    script_id: str,
+    db: DbSession,
+    user: CurrentUser,
+    from_version: int = Query(ge=1),
+    to_version: int = Query(ge=1),
+) -> ScriptDiffOut:
+    await require_role(db, workspace_id, user.id)
+    await get_script(db, workspace_id, script_id)
+    before = await get_script_version(db, workspace_id, script_id, from_version)
+    after = await get_script_version(db, workspace_id, script_id, to_version)
+    diff = "".join(
+        difflib.unified_diff(
+            version_bundle_text(before),
+            version_bundle_text(after),
+            fromfile=f"version-{from_version}",
+            tofile=f"version-{to_version}",
+        )
+    )
+    return ScriptDiffOut(from_version=from_version, to_version=to_version, diff=diff)
+
+
+@router.post("/{script_id}/restore", response_model=ScriptOut)
+async def restore_script_version(
+    workspace_id: str,
+    script_id: str,
+    payload: ScriptRestoreIn,
+    db: DbSession,
+    user: CurrentUser,
+) -> Script:
+    await require_role(db, workspace_id, user.id, "editor")
+    script = await get_script(db, workspace_id, script_id, for_update=True)
+    if script.latest_version != payload.expected_version:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Script was updated by another member")
+    source = await get_script_version(db, workspace_id, script_id, payload.source_version)
+    script.latest_version += 1
+    db.add(
+        ScriptVersion(
+            workspace_id=workspace_id,
+            script_id=script.id,
+            version=script.latest_version,
+            source_type=source.source_type,
+            source_code=source.source_code,
+            source_files=source.source_files,
+            entrypoint=source.entrypoint,
+            input_schema=source.input_schema,
+            output_schema=source.output_schema,
+            content_hash=source.content_hash,
+            change_note=payload.change_note,
+            created_by=user.id,
+        )
+    )
+    db.add(audit(workspace_id, user.id, "script.version_restored", "script", script.id, {"source_version": payload.source_version, "version": script.latest_version}))
+    await db.commit()
+    await db.refresh(script)
+    return script
 
 
 @router.put("/{script_id}", response_model=ScriptOut)
@@ -196,11 +531,16 @@ async def update_script(
     workspace_id: str, script_id: str, payload: ScriptUpdate, db: DbSession, user: CurrentUser
 ) -> Script:
     await require_role(db, workspace_id, user.id, "editor")
-    script = await get_script(db, workspace_id, script_id)
+    script = await get_script(db, workspace_id, script_id, for_update=True)
     if script.latest_version != payload.expected_version:
         raise HTTPException(status.HTTP_409_CONFLICT, "Script was updated by another member")
+    files = normalize_source_files(payload.source_code, payload.source_files)
     digest = validate_script(
-        payload.source_code, payload.entrypoint, payload.input_schema, payload.output_schema
+        payload.source_code,
+        payload.entrypoint,
+        payload.input_schema,
+        payload.output_schema,
+        files,
     )
     script.latest_version += 1
     if payload.name is not None:
@@ -215,6 +555,7 @@ async def update_script(
             script_id=script.id,
             version=script.latest_version,
             source_code=payload.source_code,
+            source_files=files,
             entrypoint=payload.entrypoint,
             input_schema=payload.input_schema,
             output_schema=payload.output_schema,
@@ -238,39 +579,25 @@ async def update_script(
     return script
 
 
-@router.post("/{script_id}/test", response_model=ScriptTestOut)
+@router.post(
+    "/{script_id}/test",
+    response_model=ScriptTestTaskOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def test_script(
-    workspace_id: str, script_id: str, payload: ScriptTestIn, db: DbSession, user: CurrentUser
-) -> ScriptTestOut:
+    workspace_id: str,
+    script_id: str,
+    payload: ScriptDraftTestIn,
+    db: DbSession,
+    user: CurrentUser,
+) -> ScriptTestTaskOut:
     await require_role(db, workspace_id, user.id, "editor")
     script = await get_script(db, workspace_id, script_id)
-    version_number = payload.version or script.latest_version
-    version = await db.scalar(
-        select(ScriptVersion).where(
-            ScriptVersion.script_id == script_id, ScriptVersion.version == version_number
-        )
+    return await enqueue_script_test(
+        workspace_id,
+        script_id,
+        await build_test_payload(db, payload, script),
     )
-    if not version:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Script version not found")
-    validate_inputs(version.input_schema, payload.inputs)
-    try:
-        async with httpx.AsyncClient(timeout=payload.timeout_seconds + 5) as client:
-            response = await client.post(
-                f"{get_settings().sandbox_url}/execute",
-                json={
-                    "source": version.source_code,
-                    "entrypoint": version.entrypoint.split(":")[-1],
-                    "inputs": payload.inputs,
-                    "timeout_seconds": payload.timeout_seconds,
-                },
-                headers={"X-Sandbox-Token": get_settings().sandbox_shared_secret},
-            )
-            response.raise_for_status()
-            return ScriptTestOut.model_validate(response.json())
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE, f"Sandbox unavailable: {exc}"
-        ) from exc
 
 
 @router.delete("/{script_id}", response_model=MessageOut)

@@ -10,11 +10,12 @@ class ScriptCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     slug: str | None = Field(default=None, max_length=80)
     description: str = Field(default="", max_length=4000)
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
     source_code: str = Field(min_length=1, max_length=1_000_000)
+    source_files: dict[str, str] = Field(default_factory=dict)
     entrypoint: str = "main"
-    input_schema: dict[str, Any] = {"type": "object"}
-    output_schema: dict[str, Any] = {}
+    input_schema: dict[str, Any] = Field(default_factory=lambda: {"type": "object"})
+    output_schema: dict[str, Any] = Field(default_factory=dict)
     change_note: str = "Initial version"
 
 
@@ -23,9 +24,10 @@ class ScriptUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=4000)
     tags: list[str] | None = None
     source_code: str = Field(min_length=1, max_length=1_000_000)
+    source_files: dict[str, str] = Field(default_factory=dict)
     entrypoint: str = "main"
-    input_schema: dict[str, Any] = {"type": "object"}
-    output_schema: dict[str, Any] = {}
+    input_schema: dict[str, Any] = Field(default_factory=lambda: {"type": "object"})
+    output_schema: dict[str, Any] = Field(default_factory=dict)
     change_note: str = "Updated script"
     expected_version: int
 
@@ -49,6 +51,7 @@ class ScriptVersionOut(ApiModel):
     version: int
     source_type: str
     source_code: str
+    source_files: dict[str, str]
     entrypoint: str
     input_schema: dict[str, Any]
     output_schema: dict[str, Any]
@@ -58,15 +61,71 @@ class ScriptVersionOut(ApiModel):
     created_at: datetime
 
 
-class ScriptTestIn(BaseModel):
+class ScriptVersionSummaryOut(ApiModel):
+    id: str
+    script_id: str
+    version: int
+    source_type: str
+    entrypoint: str
+    content_hash: str
+    change_note: str
+    created_by: str
+    created_at: datetime
+
+
+class ScriptVersionPage(BaseModel):
+    items: list[ScriptVersionSummaryOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class ScriptDraftTestIn(BaseModel):
     version: int | None = None
-    inputs: dict[str, Any] = {}
+    source_code: str | None = Field(default=None, max_length=1_000_000)
+    source_files: dict[str, str] = Field(default_factory=dict)
+    entrypoint: str | None = None
+    input_schema: dict[str, Any] | None = None
+    output_schema: dict[str, Any] | None = None
+    inputs: dict[str, Any] = Field(default_factory=dict)
     timeout_seconds: int = Field(default=30, ge=1, le=300)
+    memory_mb: int = Field(default=256, ge=64, le=2048)
+    network_enabled: bool = False
+
+
+class ScriptTestTaskOut(BaseModel):
+    task_id: str
+    status: str
+
+
+class ScriptRestoreIn(BaseModel):
+    source_version: int = Field(ge=1)
+    expected_version: int = Field(ge=1)
+    change_note: str = Field(default="Restored version", max_length=1000)
+
+
+class ScriptDiffOut(BaseModel):
+    from_version: int
+    to_version: int
+    diff: str
+
+
+class ScriptTemplateOut(BaseModel):
+    id: str
+    name: str
+    description: str
+    category: str
+    source_files: dict[str, str]
+    entrypoint: str
+    input_schema: dict[str, Any]
+    output_schema: dict[str, Any]
+    sample_inputs: dict[str, Any]
 
 
 class ScriptTestOut(BaseModel):
     status: str
-    outputs: dict[str, Any] = {}
-    logs: list[str] = []
+    outputs: dict[str, Any] = Field(default_factory=dict)
+    logs: list[str] = Field(default_factory=list)
     error: str | None = None
-    elapsed_ms: int
+    elapsed_ms: int = 0
+    logs_truncated: bool = False

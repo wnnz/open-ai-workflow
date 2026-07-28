@@ -1476,6 +1476,7 @@ def execute_sandbox(
     timeout_seconds: int = 30,
     memory_mb: int = 256,
     network_enabled: bool = False,
+    source_files: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     settings = get_settings()
     try:
@@ -1484,6 +1485,7 @@ def execute_sandbox(
                 f"{settings.sandbox_url}/execute",
                 json={
                     "source": source,
+                    "source_files": source_files or {},
                     "entrypoint": entrypoint,
                     "inputs": inputs,
                     "timeout_seconds": timeout_seconds,
@@ -1536,6 +1538,7 @@ def execute_script_runtime(runtime: dict[str, Any], inputs: dict[str, Any]) -> d
         str(runtime.get("source", "")),
         str(runtime.get("entrypoint", "main")),
         inputs,
+        source_files=runtime.get("source_files") if isinstance(runtime.get("source_files"), dict) else None,
     )
     clean_outputs = {key: value for key, value in outputs.items() if not key.startswith("_")}
     output_schema = runtime.get("output_schema", {})

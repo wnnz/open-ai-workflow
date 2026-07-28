@@ -1,12 +1,16 @@
 import asyncio
+import json
 import logging
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 
+import httpx
+from fastapi import HTTPException
 from opentelemetry import trace
 from sqlalchemy import select
 
 from app.celery_app import celery
+from app.core.config import get_settings
 from app.core.database import SessionLocal, engine
 from app.models.entities import Workflow, WorkflowApproval, WorkflowRun, WorkflowVersion
 from app.observability import configure_logging, configure_otel, deliver_alert, record_node_event
@@ -14,6 +18,13 @@ from app.services.model_providers import load_model_provider_runtimes
 from app.services.run_events import publish_run_event
 from app.services.scheduling import next_schedule_at, schedule_inputs
 from app.services.script_runtime import hydrate_script_resources
+from app.services.script_test_events import (
+    finish_script_test,
+    load_script_test_payload,
+    publish_script_test_event,
+    script_test_cancelled,
+)
+from app.services.scripts import validate_inputs
 from app.services.task_queue import enqueue_workflow_run
 from app.services.workflow_engine import WorkflowPause, execute_graph
 from app.services.workflow_environment import build_system_variables, load_workflow_environment
@@ -33,6 +44,62 @@ async def _run_and_dispose(coroutine):
 @celery.task(name="system.ping")
 def ping() -> str:
     return "pong"
+
+
+@celery.task(name="script.test")
+def test_script(task_id: str) -> str:
+    payload = load_script_test_payload(task_id)
+    if not payload:
+        return "missing"
+    if script_test_cancelled(task_id):
+        return "cancelled"
+    publish_script_test_event(task_id, {"type": "status", "status": "running"})
+    logs: list[str] = []
+    result: dict = {
+        "status": "failed",
+        "outputs": {},
+        "logs": logs,
+        "error": "Sandbox returned no result",
+        "elapsed_ms": 0,
+    }
+    try:
+        with httpx.Client(timeout=float(payload.get("timeout_seconds", 30)) + 10) as client:
+            with client.stream(
+                "POST",
+                f"{get_settings().sandbox_url}/execute/stream",
+                json={**payload, "job_id": task_id},
+                headers={"X-Sandbox-Token": get_settings().sandbox_shared_secret},
+            ) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    event = json.loads(line)
+                    if event.get("type") == "log":
+                        message = str(event.get("message", ""))
+                        logs.append(message)
+                        publish_script_test_event(task_id, event)
+                    elif event.get("type") == "result":
+                        result = {key: value for key, value in event.items() if key != "type"}
+        if result.get("status") == "succeeded":
+            outputs = result.get("outputs")
+            if not isinstance(outputs, dict):
+                raise ValueError("Python entrypoint must return an object")
+            output_schema = payload.get("output_schema") or {}
+            if output_schema:
+                validate_inputs(output_schema, outputs)
+    except (httpx.HTTPError, ValueError, HTTPException) as exc:
+        result = {
+            "status": "failed",
+            "outputs": {},
+            "error": str(getattr(exc, "detail", exc)),
+            "elapsed_ms": result.get("elapsed_ms", 0),
+        }
+    if script_test_cancelled(task_id):
+        result = {"status": "cancelled", "outputs": {}, "error": None, "elapsed_ms": result.get("elapsed_ms", 0)}
+    result["logs"] = logs
+    finish_script_test(task_id, result)
+    return str(result["status"])
 
 
 @celery.task(name="workflow.execute_run")

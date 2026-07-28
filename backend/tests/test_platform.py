@@ -1,5 +1,7 @@
 import gc
+import io
 import os
+import zipfile
 from copy import deepcopy
 from pathlib import Path
 from time import sleep as sleep_for_test
@@ -18,6 +20,7 @@ import app.services.workflow_engine as workflow_engine  # noqa: E402
 from app.bootstrap import create_schema  # noqa: E402
 from app.core.database import engine  # noqa: E402
 from app.main import app  # noqa: E402
+from app.services.scripts import validate_script  # noqa: E402
 from app.services.workflow_engine import (  # noqa: E402
     execute_graph,
     execute_http_request,
@@ -236,6 +239,175 @@ def test_versioned_script_and_workflow_publish(client: TestClient):
     assert published.status_code == 200, published.text
     reference = published.json()["resolved_references"]["script-1"]
     assert reference["version"] == 1
+
+
+def test_multi_file_script_upload_versions_diff_and_restore(client: TestClient):
+    session = client.post(
+        "/api/v1/auth/login",
+        json={"email": "owner@example.com", "password": "correct-horse-battery"},
+    ).json()
+    workspace_id = client.get("/api/v1/workspaces", headers=auth(session)).json()[0]["id"]
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "main.py",
+            "from helpers.maths import double\n\ndef main(inputs, context):\n    return {'value': double(inputs['value'])}\n",
+        )
+        archive.writestr("helpers/__init__.py", "")
+        archive.writestr("helpers/maths.py", "def double(value):\n    return value * 2\n")
+    response = client.post(
+        f"/api/v1/workspaces/{workspace_id}/scripts/upload",
+        headers=auth(session),
+        files={"file": ("multi-file.zip", archive_buffer.getvalue(), "application/zip")},
+        data={"name": "Multi file utility", "entrypoint": "main:main"},
+    )
+    assert response.status_code == 201, response.text
+    script = response.json()
+    page = client.get(
+        f"/api/v1/workspaces/{workspace_id}/scripts/{script['id']}/versions",
+        headers=auth(session),
+    )
+    assert page.status_code == 200, page.text
+    assert page.json()["total"] == 1
+    assert "source_code" not in page.json()["items"][0]
+    detail = client.get(
+        f"/api/v1/workspaces/{workspace_id}/scripts/{script['id']}/versions/1",
+        headers=auth(session),
+    )
+    assert detail.status_code == 200, detail.text
+    assert set(detail.json()["source_files"]) == {
+        "main.py",
+        "helpers/__init__.py",
+        "helpers/maths.py",
+    }
+    files = detail.json()["source_files"]
+    files["helpers/maths.py"] = "def double(value):\n    return value * 3\n"
+    updated = client.put(
+        f"/api/v1/workspaces/{workspace_id}/scripts/{script['id']}",
+        headers=auth(session),
+        json={
+            "name": script["name"],
+            "source_code": detail.json()["source_code"],
+            "source_files": files,
+            "entrypoint": "main:main",
+            "input_schema": {"type": "object"},
+            "output_schema": {"type": "object"},
+            "expected_version": 1,
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    diff = client.get(
+        f"/api/v1/workspaces/{workspace_id}/scripts/{script['id']}/diff",
+        params={"from_version": 1, "to_version": 2},
+        headers=auth(session),
+    )
+    assert diff.status_code == 200, diff.text
+    assert "return value * 3" in diff.json()["diff"]
+    restored = client.post(
+        f"/api/v1/workspaces/{workspace_id}/scripts/{script['id']}/restore",
+        headers=auth(session),
+        json={"source_version": 1, "expected_version": 2},
+    )
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["latest_version"] == 3
+    restored_detail = client.get(
+        f"/api/v1/workspaces/{workspace_id}/scripts/{script['id']}/versions/3",
+        headers=auth(session),
+    ).json()
+    assert "return value * 2" in restored_detail["source_files"]["helpers/maths.py"]
+
+
+def test_script_bundle_validation_accepts_cross_file_imports():
+    digest = validate_script(
+        "from tools.text import clean\n\ndef main(inputs, context):\n    return {'text': clean(inputs['text'])}\n",
+        "main:main",
+        {"type": "object"},
+        {"type": "object"},
+        {
+            "main.py": "from tools.text import clean\n\ndef main(inputs, context):\n    return {'text': clean(inputs['text'])}\n",
+            "tools/__init__.py": "",
+            "tools/text.py": "def clean(value):\n    return value.strip()\n",
+        },
+    )
+    assert len(digest) == 64
+
+
+@pytest.mark.parametrize("path", ["/absolute/main.py", "C:/scripts/main.py", "../main.py"])
+def test_script_bundle_validation_rejects_unsafe_paths(path: str):
+    with pytest.raises(HTTPException) as error:
+        validate_script(
+            "def main(inputs, context):\n    return {}\n",
+            "main:main",
+            {"type": "object"},
+            {"type": "object"},
+            {path: "def main(inputs, context):\n    return {}\n"},
+        )
+    assert error.value.status_code == 422
+
+
+def test_script_zip_rejects_too_many_python_files(client: TestClient):
+    session = client.post(
+        "/api/v1/auth/login",
+        json={"email": "owner@example.com", "password": "correct-horse-battery"},
+    ).json()
+    workspace_id = client.get("/api/v1/workspaces", headers=auth(session)).json()[0]["id"]
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("main.py", "def main(inputs, context):\n    return {}\n")
+        for index in range(100):
+            archive.writestr(f"module_{index}.py", f"VALUE = {index}\n")
+    response = client.post(
+        f"/api/v1/workspaces/{workspace_id}/scripts/upload",
+        headers=auth(session),
+        files={"file": ("too-many.zip", archive_buffer.getvalue(), "application/zip")},
+        data={"name": "Too many files", "entrypoint": "main:main"},
+    )
+    assert response.status_code == 422
+    assert "too many Python files" in response.json()["detail"]
+
+
+def test_unsaved_script_draft_can_be_enqueued_for_testing(client: TestClient, monkeypatch):
+    import app.api.routes.scripts as script_routes
+
+    session = client.post(
+        "/api/v1/auth/login",
+        json={"email": "owner@example.com", "password": "correct-horse-battery"},
+    ).json()
+    workspace_id = client.get("/api/v1/workspaces", headers=auth(session)).json()[0]["id"]
+    captured: dict = {}
+
+    def capture_test(task_id, captured_workspace_id, script_id, payload):
+        captured.update(
+            task_id=task_id,
+            workspace_id=captured_workspace_id,
+            script_id=script_id,
+            payload=payload,
+        )
+
+    monkeypatch.setattr(script_routes, "create_script_test", capture_test)
+    monkeypatch.setattr(script_routes.celery, "send_task", lambda *args, **kwargs: None)
+    response = client.post(
+        f"/api/v1/workspaces/{workspace_id}/scripts/test",
+        headers=auth(session),
+        json={
+            "source_files": {
+                "main.py": "from helpers import value\n\ndef main(inputs, context):\n    return {'value': value()}\n",
+                "helpers.py": "def value():\n    return 42\n",
+            },
+            "entrypoint": "main:main",
+            "input_schema": {"type": "object"},
+            "output_schema": {
+                "type": "object",
+                "properties": {"value": {"type": "integer"}},
+                "required": ["value"],
+            },
+            "inputs": {},
+        },
+    )
+    assert response.status_code == 202, response.text
+    assert captured["workspace_id"] == workspace_id
+    assert captured["script_id"] is None
+    assert captured["payload"]["source_files"]["helpers.py"].startswith("def value")
 
 
 def test_workflow_environment_variables_are_encrypted_masked_and_resolved(client: TestClient):

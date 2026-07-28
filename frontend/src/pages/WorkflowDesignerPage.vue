@@ -69,6 +69,7 @@ const LoopConfigPanel = defineAsyncComponent(() => import('@/components/designer
 const WaitConfigPanel = defineAsyncComponent(() => import('@/components/designer/WaitConfigPanel.vue'))
 const LlmConfigPanel = defineAsyncComponent(() => import('@/components/designer/LlmConfigPanel.vue'))
 const ParameterExtractorConfigPanel = defineAsyncComponent(() => import('@/components/designer/ParameterExtractorConfigPanel.vue'))
+const ScriptConfigPanel = defineAsyncComponent(() => import('@/components/designer/ScriptConfigPanel.vue'))
 const SubworkflowConfigPanel = defineAsyncComponent(() => import('@/components/designer/SubworkflowConfigPanel.vue'))
 const TemplateConfigPanel = defineAsyncComponent(() => import('@/components/designer/TemplateConfigPanel.vue'))
 const IterationConfigPanel = defineAsyncComponent(() => import('@/components/designer/IterationConfigPanel.vue'))
@@ -105,7 +106,7 @@ const modelProviders = ref<any[]>([]); const scripts = ref<any[]>([]); const sub
 const environmentVariables = ref<WorkflowEnvironmentVariable[]>([]); const showEnvironment = ref(false); const environmentSaving = ref(false); const environmentError = ref('')
 const showSystemVariables = ref(false)
 const environmentPanel = ref<{ markSaved: () => void } | null>(null)
-const configBuffers = ref({ scriptInputs: '{}', values: '{}', jsonValue: '{}', httpHeaders: '{}', httpQuery: '{}', httpBody: '', llmSchema: '{}' })
+const configBuffers = ref({ values: '{}', jsonValue: '{}', httpHeaders: '{}', httpQuery: '{}', httpBody: '', llmSchema: '{}' })
 const configFieldErrors = ref<Record<string, string>>({}); const configEditing = ref(false)
 const nodeNameError = ref('')
 type GraphState = { nodes: any[]; edges: any[]; comments?: WorkflowCommentThread[] }
@@ -127,7 +128,6 @@ const filteredVariableGroups = computed(() => {
 const startNode = computed<any>(() => (nodes.value as any[]).find(node => String(node.data?.nodeType || node.type) === 'start'))
 const startFields = computed<any[]>(() => startNode.value?.data?.config?.input_fields || [])
 const { approvalComment, approvals, clearRunOverlay, exitReplayMode, loadApprovals, loadRuns, nodeResults, openApprovals, openRunDialog, openRunHistory, pendingApprovals, replayMode, replayRun, respondingApproval, respondApproval, result, run, runError, runInputs, running, runNodeLabels, runs, runTargetLabel, runTargetNodeId, runtimeRunId, selectedApproval, selectedResult, selectedRun, showApprovals, showRunDialog, showRunHistory, uploadingField, uploadRunFile } = useWorkflowRuns({ workspaceId, workflowId, startFields, nodes, selected, inspectorTab, activeSection, currentEdges: currentCanvasEdges, commitEdges, fitView } as any)
-const selectedScript = computed<any>(() => scripts.value.find(item => item.id === selected.value?.data?.config?.script_id))
 const nextNodes = computed<any[]>(() => {
   if (!selected.value) return []
   const targets = new Set((currentCanvasEdges() as any[]).filter(edge => edge.source === selected.value!.id).map(edge => edge.target))
@@ -993,7 +993,6 @@ function syncConfigEditor() {
   const config = selected.value?.data?.config || {}
   configText.value = JSON.stringify(config, null, 2)
   configBuffers.value = {
-    scriptInputs: JSON.stringify(config.inputs || {}, null, 2),
     values: JSON.stringify(config.values || {}, null, 2),
     jsonValue: JSON.stringify(config.value || {}, null, 2),
     httpHeaders: JSON.stringify(config.headers || {}, null, 2),
@@ -1020,11 +1019,6 @@ function selectModelProvider() {
   if (!selected.value) return
   const provider = modelProviders.value.find(item => item.id === selected.value!.data.config.provider_id)
   if (provider) { selected.value.data.config.provider_name = provider.name; selected.value.data.config.model = provider.default_model }
-}
-function selectScript() {
-  if (!selected.value) return
-  const script = scripts.value.find(item => item.id === selected.value!.data.config.script_id)
-  if (script) { selected.value.data.config.script_name = script.name; selected.value.data.config.version = 'latest' }
 }
 function selectSubworkflow() {
   if (!selected.value) return
@@ -1310,12 +1304,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
                 <AgentConfigPanel v-else-if="selectedType === 'agent'" :config="selected.data.config" :providers="modelProviders" :scripts="scripts" :variable-groups="variableGroups" @provider-change="selectModelProvider" />
                 <ClassifierConfigPanel v-else-if="selectedType === 'classifier'" :config="selected.data.config" :variable-groups="variableGroups" @add="addClassifierCategory" @remove="removeClassifierCategory" @connect="openPaletteForSource(selected.id, $event)" @update-keywords="updateClassifierKeywords" />
                 <CodeConfigPanel v-else-if="selectedType === 'code'" :key="selected.id" :config="selected.data.config" :variable-groups="variableGroups" @editing="configEditing = $event" />
-                <section v-else-if="selectedType === 'script'" class="mt-5 space-y-4">
-                  <label class="field-label">{{ t('designer.workspaceScript') }}<Select v-model="selected.data.config.script_id" class="mt-1.5 !h-9 !text-xs" @change="selectScript"><option value="">{{ t('designer.selectScript') }}</option><option v-for="script in scripts" :key="script.id" :value="script.id">{{ script.name }} · v{{ script.latest_version }}</option></Select></label>
-                  <p v-if="!scripts.length" class="resource-empty">{{ t('designer.noScripts') }}</p>
-                  <label class="field-label">{{ t('designer.scriptVersion') }}<Select v-model="selected.data.config.version" class="mt-1.5 !h-9 !text-xs"><option value="latest">{{ t('designer.followLatest') }}</option><option v-if="selectedScript" :value="selectedScript.latest_version">v{{ selectedScript.latest_version }}</option></Select></label>
-                  <JsonEditorField v-model="configBuffers.scriptInputs" :label="t('designer.scriptInputs')" :error="configFieldErrors.scriptInputs" :groups="variableGroups" @input="updateStructuredField('inputs', 'scriptInputs')" />
-                </section>
+                <ScriptConfigPanel v-else-if="selectedType === 'script'" :config="selected.data.config" :scripts="scripts" :workspace-id="workspaceId" :variable-groups="variableGroups" />
                 <HttpConfigPanel v-else-if="selectedType === 'http'" :config="selected.data.config" :variable-groups="variableGroups" :buffers="configBuffers" :errors="configFieldErrors" @structured="updateStructuredField" />
                 <TemplateConfigPanel v-else-if="selectedType === 'template'" :config="selected.data.config" :variable-groups="variableGroups" />
                 <VariableAssignConfigPanel v-else-if="selectedType === 'variable'" :key="selected.id" :config="selected.data.config" :variable-groups="variableGroups" />

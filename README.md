@@ -47,6 +47,19 @@ Authorization: Bearer owf_...
 
 The key value is returned only when it is created; list responses expose only its prefix.
 
+## Python scripts
+
+The script library supports built-in templates, Monaco editing, visual input/output parameters,
+advanced JSON Schema, unsaved-draft tests, streamed logs, cancellation, version diff, and restore.
+Uploaded ZIP bundles may contain up to 100 UTF-8 `.py` files (5 MB total). Package directories and
+`__init__.py` files are preserved, so standard imports work between files. Use a module entrypoint
+such as `main:main` or `package.module:main`; when a ZIP contains exactly one function named `main`,
+the upload API can infer its module automatically. Script entrypoints must return a JSON object.
+
+Script tests run asynchronously. `POST .../scripts/test` or `POST .../scripts/{id}/test` returns a
+task ID; consume `GET .../scripts/tests/{task_id}/events` for status, logs, and the final result, or
+cancel it through `POST .../scripts/tests/{task_id}/cancel`.
+
 ## Services
 
 - `web`: Vue 3, PrimeVue Volt, Tailwind CSS, Vue Flow
