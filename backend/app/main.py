@@ -5,7 +5,6 @@ from app.api.routes import (
     admin,
     api_keys,
     auth,
-    knowledge,
     models,
     public,
     scripts,
@@ -32,7 +31,6 @@ app.include_router(workspaces.router, prefix="/api/v1")
 app.include_router(scripts.router, prefix="/api/v1")
 app.include_router(workflows.router, prefix="/api/v1")
 app.include_router(models.router, prefix="/api/v1")
-app.include_router(knowledge.router, prefix="/api/v1")
 app.include_router(api_keys.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(public.router, prefix="/v1")

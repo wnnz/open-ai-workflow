@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Handle, Position, type NodeProps } from '@vue-flow/core'
-import { AlertTriangle, BookOpen, Bot, Braces, BrainCircuit, CheckCircle2, CircleSlash, CircleStop, Code2, Combine, FileText, GitBranch, GitMerge, Globe2, ListFilter, ListTree, Play, Plus, RefreshCw, Repeat2, ScanText, Timer, UserCheck, Workflow, XCircle } from 'lucide-vue-next'
+import { AlertTriangle, Bot, Braces, BrainCircuit, CheckCircle2, CircleSlash, CircleStop, Code2, Combine, FileText, GitBranch, GitMerge, Globe2, ListFilter, ListTree, Play, Plus, RefreshCw, Repeat2, ScanText, Timer, UserCheck, Workflow, XCircle } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import NodeActionMenu, { type NodeAction } from '@/components/designer/NodeActionMenu.vue'
 import NodeValidationBadge from '@/components/designer/NodeValidationBadge.vue'
@@ -51,7 +51,6 @@ const meta = computed(() => ({
   aggregate: { icon: Combine, tone: 'indigo', detail: t('designer.nodeDetails.aggregation') },
   extract: { icon: ScanText, tone: 'cyan', detail: t('designer.nodeDetails.extraction') },
   list: { icon: ListFilter, tone: 'sky', detail: t('designer.nodeDetails.list') },
-  knowledge: { icon: BookOpen, tone: 'amber', detail: props.data?.config?.dataset_name || t('designer.nodeDetails.retrieval') },
   http: { icon: Globe2, tone: 'cyan', detail: 'HTTP' },
   condition: { icon: GitBranch, tone: 'orange', detail: props.data?.config?.conditions?.length ? `${props.data.config.conditions.length} ${t('designer.conditionCount')}` : t('designer.nodeDetails.branch') },
   human: { icon: UserCheck, tone: 'amber', detail: t('designer.nodeDetails.approval') },

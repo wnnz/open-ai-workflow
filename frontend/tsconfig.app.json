@@ -12,6 +12,8 @@
     "esModuleInterop": true,
     "moduleDetection": "force",
     "noEmit": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "strict": true,
     "jsx": "preserve",
     "baseUrl": ".",

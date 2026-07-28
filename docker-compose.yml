@@ -9,6 +9,7 @@ x-backend: &backend
   build:
     context: ./backend
     args: *build-proxy
+  restart: unless-stopped
   env_file: .env
   extra_hosts:
     - "host.docker.internal:host-gateway"
@@ -23,6 +24,7 @@ x-backend: &backend
 services:
   postgres:
     image: pgvector/pgvector:pg16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: openworkflow
       POSTGRES_PASSWORD: openworkflow
@@ -40,6 +42,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     command: redis-server --appendonly yes
     volumes:
       - redis-data:/data
@@ -53,6 +56,7 @@ services:
 
   minio:
     image: minio/minio:latest
+    restart: unless-stopped
     command: server /data --console-address :9001
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-openworkflow}
@@ -91,6 +95,7 @@ services:
     build:
       context: ./sandbox
       args: *build-proxy
+    restart: unless-stopped
     environment:
       SANDBOX_SHARED_SECRET: ${APP_SECRET_KEY}
       SANDBOX_VOLUME: open-ai-workflow_sandbox-data
@@ -103,9 +108,11 @@ services:
       - "8081:8081"
 
   document-worker:
+    profiles: ["document"]
     build:
       context: ./document-worker
       args: *build-proxy
+    restart: unless-stopped
     ports:
       - "8082:8082"
 
@@ -113,6 +120,7 @@ services:
     build:
       context: ./frontend
       args: *build-proxy
+    restart: unless-stopped
     depends_on:
       api:
         condition: service_healthy

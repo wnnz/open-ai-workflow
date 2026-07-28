@@ -13,7 +13,7 @@ def validate_script(source: str, entrypoint: str, input_schema: dict, output_sch
         tree = ast.parse(source)
     except SyntaxError as exc:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, f"Python syntax error: {exc}"
+            status.HTTP_422_UNPROCESSABLE_CONTENT, f"Python syntax error: {exc}"
         ) from exc
 
     functions = {
@@ -24,7 +24,7 @@ def validate_script(source: str, entrypoint: str, input_schema: dict, output_sch
     entry_name = entrypoint.rsplit(".", 1)[-1]
     if entry_name not in functions:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, f"Entrypoint '{entry_name}' not found"
+            status.HTTP_422_UNPROCESSABLE_CONTENT, f"Entrypoint '{entry_name}' not found"
         )
     for node in ast.walk(tree):
         if (
@@ -33,7 +33,7 @@ def validate_script(source: str, entrypoint: str, input_schema: dict, output_sch
             and node.func.id in BLOCKED_CALLS
         ):
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, f"Blocked call: {node.func.id}"
+                status.HTTP_422_UNPROCESSABLE_CONTENT, f"Blocked call: {node.func.id}"
             )
     try:
         Draft202012Validator.check_schema(input_schema)
@@ -41,7 +41,7 @@ def validate_script(source: str, entrypoint: str, input_schema: dict, output_sch
             Draft202012Validator.check_schema(output_schema)
     except Exception as exc:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, f"Invalid JSON Schema: {exc}"
+            status.HTTP_422_UNPROCESSABLE_CONTENT, f"Invalid JSON Schema: {exc}"
         ) from exc
     return hashlib.sha256(source.encode()).hexdigest()
 
@@ -49,4 +49,4 @@ def validate_script(source: str, entrypoint: str, input_schema: dict, output_sch
 def validate_inputs(schema: dict[str, Any], inputs: dict[str, Any]) -> None:
     errors = sorted(Draft202012Validator(schema).iter_errors(inputs), key=lambda error: error.path)
     if errors:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, errors[0].message)
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, errors[0].message)

@@ -57,7 +57,15 @@ def api_key_token() -> tuple[str, str, str]:
 def _fernet() -> Fernet:
     settings = get_settings()
     if settings.credential_encryption_key:
-        key = settings.credential_encryption_key.encode()
+        configured = settings.credential_encryption_key.encode()
+        try:
+            return Fernet(configured)
+        except ValueError:
+            if settings.app_env.casefold() == "production":
+                raise RuntimeError(
+                    "CREDENTIAL_ENCRYPTION_KEY must be a valid Fernet key in production"
+                ) from None
+            key = base64.urlsafe_b64encode(hashlib.sha256(configured).digest())
     else:
         digest = hashlib.sha256(settings.app_secret_key.encode()).digest()
         key = base64.urlsafe_b64encode(digest)

@@ -19,7 +19,7 @@ export type WorkflowValidationIssue = {
   nodeId?: string
   params?: Record<string, string | number>
 }
-const executionPolicyNodeTypes = new Set(['llm', 'agent', 'code', 'script', 'template', 'variable', 'json', 'aggregate', 'extract', 'list', 'knowledge', 'http', 'iteration', 'loop', 'delay', 'subworkflow', 'document'])
+const executionPolicyNodeTypes = new Set(['llm', 'agent', 'code', 'script', 'template', 'variable', 'json', 'aggregate', 'extract', 'list', 'http', 'iteration', 'loop', 'delay', 'subworkflow', 'document'])
 
 type MergeableWorkflowEdge = {
   id?: string
@@ -476,12 +476,6 @@ export function validateWorkflowGraph(
       if (inputs.some((item: any) => !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(String(item?.name || '')) || item?.value === undefined) || new Set(inputNames).size !== inputNames.length) issues.push({ code: 'codeInputsInvalid', nodeId: node.id, params })
       if (!outputs.length || outputs.some((item: any) => !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(String(item?.name || '')) || !['String','Number','Boolean','Object','Array','File','Any'].includes(item?.type || 'Any')) || new Set(outputNames).size !== outputNames.length) issues.push({ code: 'codeOutputsInvalid', nodeId: node.id, params })
       if (!(Number(config.timeout_seconds ?? 30) >= 1 && Number(config.timeout_seconds ?? 30) <= 300) || !(Number(config.memory_mb ?? 256) >= 64 && Number(config.memory_mb ?? 256) <= 2048)) issues.push({ code: 'codeRuntimeInvalid', nodeId: node.id, params })
-    }
-    if (type === 'knowledge') {
-      const datasetIds = Array.isArray(config.dataset_ids) ? config.dataset_ids.filter(Boolean) : String(config.dataset_id || '').trim() ? [config.dataset_id] : []
-      if (!datasetIds.length) issues.push({ code: 'knowledgeRequired', nodeId: node.id, params })
-      if (!String(config.query || '').trim()) issues.push({ code: 'knowledgeQueryRequired', nodeId: node.id, params })
-      if (!['hybrid', 'vector', 'fulltext'].includes(config.retrieval_mode || 'hybrid') || !Number.isInteger(Number(config.top_k)) || Number(config.top_k) < 1 || Number(config.top_k) > 100) issues.push({ code: 'knowledgeSettingsInvalid', nodeId: node.id, params })
     }
     if (type === 'http') {
       const url = String(config.url || '').trim()

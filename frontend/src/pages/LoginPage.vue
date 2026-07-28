@@ -33,7 +33,7 @@ async function submit() {
       <div class="mt-7 space-y-4"><FormField v-if="registerMode" :label="t('auth.name')" required><InputText v-model="name" required /></FormField><FormField :label="t('auth.email')" required><InputText v-model="email" type="email" required /></FormField><FormField :label="t('auth.password')" required><InputText v-model="password" type="password" required /></FormField></div>
       <AlertBanner :message="error" tone="error" />
       <Button class="mt-6 !w-full" type="submit" :loading="loading" :label="registerMode ? t('auth.register') : t('auth.login')" />
-      <button type="button" class="mt-4 w-full text-center text-sm text-[var(--primary)]" @click="registerMode = !registerMode">{{ registerMode ? t('auth.switchLogin') : t('auth.switchRegister') }}</button>
+      <Button type="button" variant="link" block class="mt-4" @click="registerMode = !registerMode">{{ registerMode ? t('auth.switchLogin') : t('auth.switchRegister') }}</Button>
     </form>
   </div>
 </template>

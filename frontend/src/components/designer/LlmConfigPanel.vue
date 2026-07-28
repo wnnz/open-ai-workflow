@@ -46,7 +46,7 @@ function removeMessage(index: number) { props.config.messages.splice(index, 1) }
       <label class="field-label mt-3">{{ t('designer.modelName') }}<InputText v-model="config.model" class="mt-1.5" placeholder="gpt-4.1-mini" /></label>
     </div>
 
-    <NodeInputPanel :config="config" :fields="[{ key: 'context', label: t('designer.llmContext'), type: 'String', placeholder: '{{knowledge.documents}}', hint: t('designer.llmContextHint') }]" :variable-groups="variableGroups" />
+    <NodeInputPanel :config="config" :fields="[{ key: 'context', label: t('designer.llmContext'), type: 'String', placeholder: '{{SourceNode.text}}', hint: t('designer.llmContextHint') }]" :variable-groups="variableGroups" />
 
     <div>
       <div class="flex items-center"><div><h3 class="text-xs font-semibold">{{ t('designer.promptMessages') }}</h3><p class="muted mt-1 text-[11px]">{{ t('designer.promptMessagesHint') }}</p></div><button type="button" class="icon-button ml-auto" :aria-label="t('designer.addMessage')" @click="addMessage()"><Plus :size="14" /></button></div>

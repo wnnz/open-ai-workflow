@@ -2,11 +2,11 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { BookOpen, Bot, Boxes, ChevronDown, FileCode2, Languages, LogOut, Moon, Settings, ShieldCheck, Sun, Users, Workflow } from 'lucide-vue-next'
+import { Bot, Boxes, ChevronDown, FileCode2, Languages, LogOut, Moon, Settings, ShieldCheck, Sun, Users, Workflow } from 'lucide-vue-next'
 import Button from '@/volt/Button.vue'
 import api from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
-import { usePreferencesStore, type Theme } from '@/stores/preferences'
+import { usePreferencesStore } from '@/stores/preferences'
 import { useWorkspacesStore } from '@/stores/workspaces'
 
 const { t } = useI18n()
@@ -18,7 +18,6 @@ const activeBase = computed(() => `/w/${workspaces.activeId || ''}`)
 const nav = computed(() => [
   { label: t('nav.studio'), icon: Workflow, path: `${activeBase.value}/studio` },
   { label: t('nav.scripts'), icon: FileCode2, path: `${activeBase.value}/scripts` },
-  { label: t('nav.knowledge'), icon: BookOpen, path: `${activeBase.value}/knowledge` },
   { label: t('nav.models'), icon: Bot, path: `${activeBase.value}/models` },
   { label: t('nav.members'), icon: Users, path: `${activeBase.value}/members` },
   { label: t('nav.settings'), icon: Settings, path: `${activeBase.value}/settings` },

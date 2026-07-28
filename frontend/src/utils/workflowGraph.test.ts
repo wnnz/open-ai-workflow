@@ -175,23 +175,6 @@ describe('workflow graph utilities', () => {
     ]))
   })
 
-  it('validates knowledge retrieval datasets, query, and recall settings', () => {
-    const knowledge = { id: 'knowledge', type: 'knowledge', position: { x: 0, y: 0 }, data: { nodeType: 'knowledge', label: 'Search', config: { dataset_ids: [], query: '', retrieval_mode: 'unknown', top_k: 0 } } }
-    const issues = validateWorkflowGraph([
-      { ...nodes[0], data: { nodeType: 'start', config: { triggers: ['form'], input_fields: [{ name: 'message' }] } } },
-      knowledge,
-      nodes[2],
-    ], [{ id: 'a', source: 'start', target: 'knowledge' }, { id: 'b', source: 'knowledge', target: 'end' }])
-    expect(issues.map(issue => issue.code)).toEqual(expect.arrayContaining(['knowledgeRequired', 'knowledgeQueryRequired', 'knowledgeSettingsInvalid']))
-
-    const configured = { ...knowledge, data: { ...knowledge.data, config: { dataset_ids: ['dataset-a'], query: '{{inputs.message}}', retrieval_mode: 'hybrid', top_k: 5 } } }
-    expect(validateWorkflowGraph([
-      { ...nodes[0], data: { nodeType: 'start', config: { triggers: ['form'], input_fields: [{ name: 'message' }] } } },
-      configured,
-      nodes[2],
-    ], [{ id: 'a', source: 'start', target: 'knowledge' }, { id: 'b', source: 'knowledge', target: 'end' }]).filter(issue => issue.nodeId === 'knowledge')).toEqual([])
-  })
-
   it('accepts a complete linear workflow', () => {
     const configured = [
       { ...nodes[0], data: { nodeType: 'start', config: { triggers: ['form'], input_fields: [{ name: 'message' }] } } },

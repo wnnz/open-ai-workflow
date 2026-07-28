@@ -29,7 +29,6 @@ export function getNodeOutputVariables(node: WorkflowNodeLike): WorkflowVariable
     template: [['text', 'String']],
     json: [['value', 'Object']],
     list: [['items', 'Array'], ['item', 'Any']],
-    knowledge: [['documents', 'Array[Document]']],
     http: [['status_code', 'Number'], ['body', 'Object'], ['headers', 'Object'], ['url', 'String'], ['elapsed_ms', 'Number'], ['ok', 'Boolean']],
     condition: [['result', 'Boolean'], ['branch', 'String'], ['clauses', 'Array[Boolean]']],
     human: [['approved', 'Boolean'], ['comment', 'String']],
@@ -147,7 +146,6 @@ export function buildVariableCatalog(
   edges: WorkflowEdgeLike[],
   targetNodeId: string,
 ): WorkflowVariableGroup[] {
-  const byId = new Map(nodes.map(node => [node.id, node]))
   const incoming = new Map<string, string[]>()
   for (const edge of edges) incoming.set(edge.target, [...(incoming.get(edge.target) || []), edge.source])
 

@@ -133,7 +133,7 @@ async def create_invitation(
 ) -> InviteOut:
     await require_role(db, workspace_id, user.id, "admin")
     if payload.role not in {"admin", "editor", "viewer"}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid invitation role")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid invitation role")
     raw, digest = invitation_token()
     invitation = WorkspaceInvitation(
         workspace_id=workspace_id,
@@ -195,7 +195,7 @@ async def update_member_role(
     if not member or member.workspace_id != workspace_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Member not found")
     if member.role == "owner" or payload.role not in {"admin", "editor", "viewer"}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Owner role must be transferred")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Owner role must be transferred")
     member.role = payload.role
     db.add(
         audit(
@@ -221,7 +221,7 @@ async def remove_member(
     if not member or member.workspace_id != workspace_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Member not found")
     if member.role == "owner":
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Owner must transfer ownership")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Owner must transfer ownership")
     if member.user_id != user.id and actor.role not in {"owner", "admin"}:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient workspace role")
     await db.delete(member)

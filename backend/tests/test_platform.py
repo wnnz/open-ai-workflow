@@ -2,6 +2,7 @@ import os
 from copy import deepcopy
 from pathlib import Path
 from time import sleep as sleep_for_test
+from unittest.mock import AsyncMock
 
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test-openworkflow.db"
 Path("test-openworkflow.db").unlink(missing_ok=True)
@@ -22,9 +23,62 @@ from app.services.workflow_engine import (  # noqa: E402
     validate_code_config,
     validate_document_config,
     validate_http_config,
-    validate_knowledge_config,
     validate_llm_config,
 )
+
+
+@pytest.mark.asyncio
+async def test_create_schema_retries_until_database_is_ready(monkeypatch):
+    import app.bootstrap as bootstrap
+
+    class Connection:
+        run_sync = AsyncMock()
+
+    class BeginContext:
+        async def __aenter__(self):
+            fake_engine.attempts += 1
+            if fake_engine.attempts < 3:
+                raise ConnectionError("database is starting up")
+            return Connection()
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    class Engine:
+        attempts = 0
+
+        def begin(self):
+            return BeginContext()
+
+    fake_engine = Engine()
+    sleep = AsyncMock()
+    monkeypatch.setattr(bootstrap, "engine", fake_engine)
+    monkeypatch.setattr(bootstrap.asyncio, "sleep", sleep)
+
+    await bootstrap.create_schema(max_attempts=3, retry_delay_seconds=0.01)
+
+    assert fake_engine.attempts == 3
+    assert sleep.await_count == 2
+
+
+def test_development_encryption_key_derives_invalid_config_but_production_rejects(monkeypatch):
+    import app.core.security as security
+
+    class DevelopmentSettings:
+        credential_encryption_key = "development-placeholder"
+        app_secret_key = "unused"
+        app_env = "development"
+
+    monkeypatch.setattr(security, "get_settings", lambda: DevelopmentSettings())
+    encrypted = security.encrypt_secret("secret-value")
+    assert security.decrypt_secret(encrypted) == "secret-value"
+
+    class ProductionSettings(DevelopmentSettings):
+        app_env = "production"
+
+    monkeypatch.setattr(security, "get_settings", lambda: ProductionSettings())
+    with pytest.raises(RuntimeError, match="valid Fernet key"):
+        security.encrypt_secret("secret-value")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -688,7 +742,7 @@ def test_llm_config_supports_messages_and_structured_output():
             "max_tokens": 2048,
             "response_format": "json_schema",
             "response_schema": {"type": "object", "properties": {"answer": {"type": "string"}}},
-            "context": "{{knowledge.documents}}",
+            "context": "{{SourceNode.text}}",
             "vision": {"enabled": True, "variable": "{{inputs.images}}", "detail": "high"},
             "reasoning": {"separate": True},
         }
@@ -702,31 +756,6 @@ def test_llm_config_supports_messages_and_structured_output():
         validate_llm_config({"model": "gpt-4.1-mini", "prompt": "Hello", "vision": {"enabled": True, "variable": "", "detail": "high"}})
     with pytest.raises(HTTPException):
         validate_llm_config({"model": "gpt-4.1-mini", "prompt": "Hello", "reasoning": {"separate": "yes"}})
-
-
-def test_knowledge_config_supports_fused_retrieval_and_metadata_filters():
-    validate_knowledge_config(
-        {
-            "dataset_ids": ["dataset-a", "dataset-b"],
-            "query": "{{inputs.message}}",
-            "retrieval_mode": "hybrid",
-            "rerank": {"mode": "weighted", "semantic_weight": 0.8, "model_name": ""},
-            "top_k": 8,
-            "score_threshold": {"enabled": True, "value": 0.35},
-            "metadata_filter": {
-                "enabled": True,
-                "logical_operator": "and",
-                "conditions": [{"key": "department", "operator": "equals", "value": "sales"}],
-            },
-        }
-    )
-    validate_knowledge_config({"dataset_id": "legacy-dataset", "query": "hello", "top_k": 5})
-    with pytest.raises(HTTPException):
-        validate_knowledge_config({"dataset_ids": [], "query": "hello"})
-    with pytest.raises(HTTPException):
-        validate_knowledge_config({"dataset_ids": ["dataset-a"], "query": "hello", "rerank": {"mode": "model", "model_name": ""}})
-    with pytest.raises(HTTPException):
-        validate_knowledge_config({"dataset_ids": ["dataset-a"], "query": "hello", "metadata_filter": {"enabled": True, "conditions": [{"key": "", "operator": "equals", "value": "x"}]}})
 
 
 def test_document_config_supports_office_pdf_operations():
@@ -1170,22 +1199,9 @@ def test_management_resource_lifecycle_and_run_logs(client: TestClient):
     headers = auth(session)
     workspace_id = client.get("/api/v1/workspaces", headers=headers).json()[0]["id"]
 
-    dataset = client.post(
-        f"/api/v1/workspaces/{workspace_id}/knowledge",
-        headers=headers,
-        json={"name": "QA knowledge", "description": "Lifecycle test"},
-    )
-    assert dataset.status_code == 201, dataset.text
-    dataset_id = dataset.json()["id"]
-    documents = client.get(
-        f"/api/v1/workspaces/{workspace_id}/knowledge/{dataset_id}/documents",
-        headers=headers,
-    )
-    assert documents.status_code == 200
-    assert documents.json() == []
-    assert client.delete(
-        f"/api/v1/workspaces/{workspace_id}/knowledge/{dataset_id}", headers=headers
-    ).status_code == 200
+    assert client.get(
+        f"/api/v1/workspaces/{workspace_id}/knowledge", headers=headers
+    ).status_code == 404
 
     model = client.post(
         f"/api/v1/workspaces/{workspace_id}/models",
@@ -1211,6 +1227,269 @@ def test_management_resource_lifecycle_and_run_logs(client: TestClient):
     )
     assert logs.status_code == 200
     assert isinstance(logs.json(), list)
+
+
+@pytest.mark.asyncio
+async def test_model_connection_falls_back_to_minimal_inference_when_catalog_is_missing():
+    from app.services.model_providers import test_provider_connection
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(404, json={"error": {"message": "catalog disabled"}})
+        assert request.url.path.endswith("/chat/completions")
+        return httpx.Response(
+            200,
+            json={
+                "model": "test-model",
+                "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+            },
+        )
+
+    result = await test_provider_connection(
+        base_url="https://models.example/v1",
+        api_key="secret",
+        default_model="test-model",
+        config={},
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert result["status"] == "warning"
+    assert result["inference_verified"] is True
+    assert "inference succeeded" in result["warning"]
+
+
+@pytest.mark.asyncio
+async def test_model_catalog_fetch_returns_available_models():
+    from app.services.model_providers import fetch_provider_models
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/models"
+        assert request.headers["authorization"] == "Bearer catalog-secret"
+        return httpx.Response(
+            200,
+            json={"data": [{"id": "model-b"}, {"id": "model-a"}]},
+        )
+
+    result = await fetch_provider_models(
+        base_url="https://models.example/v1",
+        api_key="catalog-secret",
+        config={},
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert result["models"] == ["model-b", "model-a"]
+    assert result["latency_ms"] >= 0
+
+
+def test_model_catalog_endpoints_support_unsaved_and_saved_forms(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    import app.api.routes.models as model_routes
+
+    calls: list[dict] = []
+
+    async def fake_fetch(**kwargs):
+        calls.append(kwargs)
+        return {"models": ["catalog-model"], "latency_ms": 12.5}
+
+    monkeypatch.setattr(model_routes, "fetch_provider_models", fake_fetch)
+    session = client.post(
+        "/api/v1/auth/login",
+        json={"email": "owner@example.com", "password": "correct-horse-battery"},
+    ).json()
+    headers = auth(session)
+    workspace_id = client.get("/api/v1/workspaces", headers=headers).json()[0]["id"]
+    base = f"/api/v1/workspaces/{workspace_id}/models"
+
+    unsaved = client.post(
+        f"{base}/catalog",
+        headers=headers,
+        json={"base_url": "https://models.example/v1", "api_key": "draft-secret"},
+    )
+    assert unsaved.status_code == 200, unsaved.text
+    assert unsaved.json()["models"] == ["catalog-model"]
+    assert calls[-1]["api_key"] == "draft-secret"
+
+    provider = client.post(
+        base,
+        headers=headers,
+        json={
+            "name": "Catalog provider",
+            "base_url": "https://saved.example/v1",
+            "api_key": "saved-secret",
+            "default_model": "catalog-model",
+        },
+    ).json()
+    saved = client.post(f"{base}/{provider['id']}/catalog", headers=headers, json={})
+    assert saved.status_code == 200, saved.text
+    assert calls[-1]["base_url"] == "https://saved.example/v1"
+    assert calls[-1]["api_key"] == "saved-secret"
+
+
+def test_model_provider_update_reference_protection_and_secret_masking(client: TestClient):
+    session = client.post(
+        "/api/v1/auth/login",
+        json={"email": "owner@example.com", "password": "correct-horse-battery"},
+    ).json()
+    headers = auth(session)
+    workspace_id = client.get("/api/v1/workspaces", headers=headers).json()[0]["id"]
+    base = f"/api/v1/workspaces/{workspace_id}/models"
+    created = client.post(
+        base,
+        headers=headers,
+        json={
+            "name": "Protected provider",
+            "base_url": "https://models.example/v1/",
+            "api_key": "never-return-provider-secret",
+            "default_model": "test-model",
+            "config": {"api_mode": "chat_completions"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    provider = created.json()
+    assert provider["base_url"] == "https://models.example/v1"
+    assert provider["has_api_key"] is True
+    assert "never-return-provider-secret" not in created.text
+
+    updated = client.patch(
+        f"{base}/{provider['id']}",
+        headers=headers,
+        json={"name": "Protected provider updated", "default_model": "test-model-v2"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["has_api_key"] is True
+    duplicate = client.post(
+        base,
+        headers=headers,
+        json={
+            "name": "Protected provider updated",
+            "base_url": "https://another.example/v1",
+            "api_key": "",
+            "default_model": "other-model",
+        },
+    )
+    assert duplicate.status_code == 409
+
+    workflow = client.post(
+        f"/api/v1/workspaces/{workspace_id}/workflows",
+        headers=headers,
+        json={"name": "Provider reference protection"},
+    ).json()
+    graph = workflow["draft_graph"]
+    graph["nodes"].insert(
+        1,
+        {
+            "id": "writer",
+            "type": "llm",
+            "position": {"x": 250, "y": 160},
+            "data": {
+                "label": "Writer",
+                "config": {
+                    "provider_id": provider["id"],
+                    "model": "test-model-v2",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                },
+            },
+        },
+    )
+    graph["edges"] = [
+        {"id": "a", "source": "start", "target": "writer"},
+        {"id": "b", "source": "writer", "target": "end"},
+    ]
+    saved = client.put(
+        f"/api/v1/workspaces/{workspace_id}/workflows/{workflow['id']}",
+        headers=headers,
+        json={"graph": graph, "expected_version": workflow["draft_version"]},
+    )
+    assert saved.status_code == 200, saved.text
+    blocked = client.delete(f"{base}/{provider['id']}", headers=headers)
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["references"][0]["name"] == workflow["name"]
+
+    graph["nodes"] = [node for node in graph["nodes"] if node["id"] != "writer"]
+    graph["edges"] = [{"id": "direct", "source": "start", "target": "end"}]
+    unlinked = client.put(
+        f"/api/v1/workspaces/{workspace_id}/workflows/{workflow['id']}",
+        headers=headers,
+        json={"graph": graph, "expected_version": saved.json()["draft_version"]},
+    )
+    assert unlinked.status_code == 200, unlinked.text
+    assert client.delete(f"{base}/{provider['id']}", headers=headers).status_code == 200
+
+
+def test_llm_node_executes_the_configured_provider(monkeypatch: pytest.MonkeyPatch):
+    import app.services.model_execution as model_execution
+
+    real_client = httpx.Client
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/chat/completions"
+        assert request.headers["authorization"] == "Bearer runtime-secret"
+        return httpx.Response(
+            200,
+            json={
+                "model": "test-model",
+                "choices": [{"message": {"role": "assistant", "content": "Hello from model"}}],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
+            },
+        )
+
+    monkeypatch.setattr(
+        model_execution.httpx,
+        "Client",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(handler), timeout=kwargs["timeout"]),
+    )
+    graph = {
+        "nodes": [
+            {
+                "id": "start",
+                "type": "start",
+                "data": {"label": "Start", "config": {"triggers": ["api"], "input_fields": []}},
+            },
+            {
+                "id": "writer",
+                "type": "llm",
+                "data": {
+                    "label": "Writer",
+                    "config": {
+                        "provider_id": "provider-1",
+                        "model": "test-model",
+                        "messages": [{"role": "user", "content": "{{inputs.message}}"}],
+                    },
+                },
+            },
+            {
+                "id": "end",
+                "type": "end",
+                "data": {
+                    "label": "End",
+                    "config": {
+                        "outputs": [{"name": "result", "type": "String", "value": "{{Writer.text}}"}]
+                    },
+                },
+            },
+        ],
+        "edges": [
+            {"source": "start", "target": "writer"},
+            {"source": "writer", "target": "end"},
+        ],
+    }
+    output, trace = execute_graph(
+        graph,
+        {"message": "Hello"},
+        model_providers={
+            "provider-1": {
+                "base_url": "https://127.0.0.1/v1",
+                "api_key": "runtime-secret",
+                "default_model": "test-model",
+                "config": {"api_mode": "chat_completions", "allow_private_network": True},
+            }
+        },
+    )
+
+    assert output == {"result": "Hello from model"}
+    assert trace[1]["output"]["_usage"]["total_tokens"] == 7
+    assert "runtime-secret" not in str(trace)
 
 
 def test_human_approval_pauses_and_resumes_the_selected_branch(client: TestClient):

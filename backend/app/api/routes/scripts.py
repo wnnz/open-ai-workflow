@@ -117,7 +117,7 @@ async def upload_script(
             source_type = "zip"
         except (KeyError, ValueError, zipfile.BadZipFile, UnicodeDecodeError) as exc:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, f"Invalid script archive: {exc}"
+                status.HTTP_422_UNPROCESSABLE_CONTENT, f"Invalid script archive: {exc}"
             ) from exc
     else:
         raise HTTPException(

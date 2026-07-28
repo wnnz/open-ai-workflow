@@ -5,7 +5,7 @@ import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { Background } from '@vue-flow/background'
 import { VueFlow, useVueFlow, type Connection, type Edge, type Node, type NodeMouseEvent } from '@vue-flow/core'
 import { MiniMap } from '@vue-flow/minimap'
-import { Activity, AlertTriangle, ArrowLeft, BookOpen, Bot, Braces, BrainCircuit, Check, ChevronRight, CircleStop, Clock3, Code2, Combine, Copy, FileText, GitBranch, GitMerge, Globe2, History, ListChecks, ListFilter, ListTree, MousePointer2, Play, Plus, RefreshCw, Repeat2, Rocket, Save, ScanText, Search, Timer, UserCheck, Workflow, X } from 'lucide-vue-next'
+import { Activity, AlertTriangle, ArrowLeft, Bot, Braces, BrainCircuit, Check, ChevronRight, CircleStop, Code2, Combine, Copy, FileText, GitBranch, GitMerge, Globe2, History, ListChecks, ListFilter, ListTree, MousePointer2, Play, Plus, RefreshCw, Repeat2, Rocket, Save, ScanText, Search, Timer, UserCheck, Workflow, X } from 'lucide-vue-next'
 import api from '@/api/client'
 import { messages } from '@/i18n'
 import VariableField from '@/components/VariableField.vue'
@@ -20,14 +20,12 @@ import ExecutionPolicyPanel from '@/components/designer/ExecutionPolicyPanel.vue
 import HttpConfigPanel from '@/components/designer/HttpConfigPanel.vue'
 import HumanConfigPanel from '@/components/designer/HumanConfigPanel.vue'
 import JsonEditorField from '@/components/designer/JsonEditorField.vue'
-import KnowledgeConfigPanel from '@/components/designer/KnowledgeConfigPanel.vue'
 import ListOperatorConfigPanel from '@/components/designer/ListOperatorConfigPanel.vue'
 import LoopConfigPanel from '@/components/designer/LoopConfigPanel.vue'
 import WaitConfigPanel from '@/components/designer/WaitConfigPanel.vue'
 import LlmConfigPanel from '@/components/designer/LlmConfigPanel.vue'
 import NextStepPanel from '@/components/designer/NextStepPanel.vue'
 import NodeActionMenu, { type NodeAction } from '@/components/designer/NodeActionMenu.vue'
-import NodeInputPanel from '@/components/designer/NodeInputPanel.vue'
 import NodeOutputPanel from '@/components/designer/NodeOutputPanel.vue'
 import NodePalette from '@/components/designer/NodePalette.vue'
 import ParameterExtractorConfigPanel from '@/components/designer/ParameterExtractorConfigPanel.vue'
@@ -43,7 +41,10 @@ import WorkflowCommentPin from '@/components/designer/WorkflowCommentPin.vue'
 import WorkflowCommentsPanel from '@/components/designer/WorkflowCommentsPanel.vue'
 import WorkflowCanvasControls from '@/components/designer/WorkflowCanvasControls.vue'
 import WorkflowDesignerSidebar, { type DesignerSection } from '@/components/designer/WorkflowDesignerSidebar.vue'
+import WorkflowApiPanel from '@/components/designer/WorkflowApiPanel.vue'
+import WorkflowMonitoringPanel from '@/components/designer/WorkflowMonitoringPanel.vue'
 import WorkflowNodeInspector, { type InspectorTab } from '@/components/designer/WorkflowNodeInspector.vue'
+import WorkflowRunLogsPanel from '@/components/designer/WorkflowRunLogsPanel.vue'
 import WorkflowEnvironmentPanel, { type WorkflowEnvironmentVariable } from '@/components/designer/WorkflowEnvironmentPanel.vue'
 import WorkflowSystemVariablesPanel from '@/components/designer/WorkflowSystemVariablesPanel.vue'
 import WorkflowSaveStatus from '@/components/designer/WorkflowSaveStatus.vue'
@@ -104,7 +105,7 @@ const runTargetNodeId = ref<string | null>(null); const nodeResults = ref<Record
 const runtimeRunId = ref('')
 const replayMode = computed(() => Boolean(runtimeRunId.value && selectedRun.value))
 const approvals = ref<any[]>([]); const selectedApproval = ref<any>(null); const showApprovals = ref(false); const approvalComment = ref(''); const respondingApproval = ref(false)
-const modelProviders = ref<any[]>([]); const scripts = ref<any[]>([]); const datasets = ref<any[]>([]); const subworkflows = ref<any[]>([])
+const modelProviders = ref<any[]>([]); const scripts = ref<any[]>([]); const subworkflows = ref<any[]>([])
 const environmentVariables = ref<WorkflowEnvironmentVariable[]>([]); const showEnvironment = ref(false); const environmentSaving = ref(false); const environmentError = ref('')
 const showSystemVariables = ref(false)
 const environmentPanel = ref<{ markSaved: () => void } | null>(null)
@@ -162,12 +163,12 @@ const saveState = computed<'idle' | 'dirty' | 'saving' | 'saved' | 'error' | 'co
   return lastSavedAt.value ? 'saved' : 'idle'
 })
 const localHistoryEntries = computed(() => graphHistory.value.map((state, index) => ({ state, index, time: historyTimes.value[index] })).reverse())
-const nodeTypes = { ...Object.fromEntries(['start', 'end', 'default', 'llm', 'agent', 'classifier', 'code', 'script', 'template', 'variable', 'json', 'aggregate', 'extract', 'list', 'knowledge', 'http', 'condition', 'human', 'wait', 'delay', 'subworkflow', 'document'].map(type => [type, markRaw(WorkflowNode)])), iteration: markRaw(WorkflowContainerNode), loop: markRaw(WorkflowContainerNode), note: markRaw(WorkflowNoteNode) }
+const nodeTypes = { ...Object.fromEntries(['start', 'end', 'default', 'llm', 'agent', 'classifier', 'code', 'script', 'template', 'variable', 'json', 'aggregate', 'extract', 'list', 'http', 'condition', 'human', 'wait', 'delay', 'subworkflow', 'document'].map(type => [type, markRaw(WorkflowNode)])), iteration: markRaw(WorkflowContainerNode), loop: markRaw(WorkflowContainerNode), note: markRaw(WorkflowNoteNode) }
 const edgeTypes = { workflow: markRaw(WorkflowEdge) }
 const paletteSections = computed(() => {
   const query = paletteQuery.value.trim().toLocaleLowerCase()
   const sections = [
-    { key: 'ai', items: [{ type: 'agent', icon: BrainCircuit }, { type: 'llm', icon: Bot }, { type: 'knowledge', icon: BookOpen }, { type: 'end', icon: CircleStop }, { type: 'classifier', icon: ListFilter }] },
+    { key: 'ai', items: [{ type: 'agent', icon: BrainCircuit }, { type: 'llm', icon: Bot }, { type: 'end', icon: CircleStop }, { type: 'classifier', icon: ListFilter }] },
     { key: 'data', items: [{ type: 'template', icon: FileText }, { type: 'variable', icon: ListTree }, { type: 'json', icon: Code2 }, { type: 'aggregate', icon: Combine }, { type: 'extract', icon: ScanText }, { type: 'list', icon: ListFilter }] },
     { key: 'tools', items: [{ type: 'code', icon: Code2 }, { type: 'script', icon: Braces }, { type: 'http', icon: Globe2 }, { type: 'document', icon: FileText }] },
     { key: 'logic', items: [{ type: 'condition', icon: GitBranch }, { type: 'wait', icon: GitMerge }, { type: 'human', icon: UserCheck }, { type: 'iteration', icon: Repeat2 }, { type: 'loop', icon: RefreshCw }, { type: 'subworkflow', icon: Workflow }, { type: 'delay', icon: Timer }] },
@@ -188,10 +189,11 @@ const commandActions = computed(() => [
 ])
 let saveTimer: ReturnType<typeof setTimeout> | undefined
 let historyTimer: ReturnType<typeof setTimeout> | undefined
+let selectionRestoreTimer: ReturnType<typeof setTimeout> | undefined
 let activeSave: Promise<boolean> | null = null
 let restoringHistory = false
 let pendingSourceConnection: { sourceId: string; sourceHandle?: string } | null = null
-const executionPolicyNodeTypes = new Set(['llm', 'agent', 'code', 'script', 'template', 'variable', 'json', 'aggregate', 'extract', 'list', 'knowledge', 'http', 'iteration', 'loop', 'delay', 'subworkflow', 'document'])
+const executionPolicyNodeTypes = new Set(['llm', 'agent', 'code', 'script', 'template', 'variable', 'json', 'aggregate', 'extract', 'list', 'http', 'iteration', 'loop', 'delay', 'subworkflow', 'document'])
 
 function defaultNodeConfig(type: string) {
   const defaults: Record<string, any> = {
@@ -207,7 +209,6 @@ function defaultNodeConfig(type: string) {
     aggregate: { variables: [''], group_enabled: false, groups: [] },
     extract: { provider_id: '', model: '', source: '{{inputs.message}}', fields: [{ name: '', type: 'String', description: '', required: false }], instruction: '', vision: { enabled: false, variable: '' } },
     list: { source: '', filter: { enabled: false, field: '', operator: 'equals', value: '' }, nth: { enabled: false, index: 1 }, limit: { enabled: false, count: 10 }, sort: { enabled: false, order: 'asc', key: '' }, unique: false },
-    knowledge: { dataset_id: '', dataset_ids: [], query: '{{inputs.message}}', retrieval_mode: 'hybrid', rerank: { mode: 'weighted', semantic_weight: 0.7, model_name: '' }, top_k: 5, threshold: 0.2, score_threshold: { enabled: false, value: 0.2 }, metadata_filter: { enabled: false, logical_operator: 'and', conditions: [] } },
     http: { method: 'GET', url: '', timeout_seconds: 30, max_response_bytes: 2000000, follow_redirects: false, query: {}, headers: {}, auth: { type: 'none', token: '', username: '', password: '', key: '', value: '', location: 'header' }, body_type: 'json', body: {} },
     condition: { logical_operator: 'and', conditions: [{ variable: '', operator: 'equals', value: '' }], expression: '' },
     human: { submission_methods: ['studio'], form_content: '', actions: [{ id: 'approve', label: t('designer.approve'), value: 'approved', style: 'primary' }, { id: 'reject', label: t('designer.reject'), value: 'rejected', style: 'danger' }], timeout_minutes: 4320 },
@@ -426,12 +427,12 @@ async function load() {
   loaded.value = false
   const { data } = await api.get(`/workspaces/${workspaceId.value}/workflows/${workflowId.value}`)
   workflow.value = data
-  const sequenceIds = new Set<string>(data.draft_graph.nodes.filter((node: any) => String(node.data?.nodeType || node.type) === 'sequence').map((node: any) => node.id))
-  const removedSequenceNodeIds = new Set<string>([
-    ...sequenceIds,
-    ...data.draft_graph.nodes.filter((node: any) => sequenceIds.has(String(node.parentNode || ''))).map((node: any) => node.id),
-  ])
-  const draftNodes = data.draft_graph.nodes.filter((node: any) => !removedSequenceNodeIds.has(node.id))
+  const removedKnowledgeNodeIds = new Set<string>(
+    data.draft_graph.nodes
+      .filter((node: any) => String(node.data?.nodeType || node.type) === 'knowledge')
+      .map((node: any) => String(node.id)),
+  )
+  const draftNodes = data.draft_graph.nodes.filter((node: any) => !removedKnowledgeNodeIds.has(String(node.id)))
   const draftStart = draftNodes.find((node: any) => String(node.data?.nodeType || node.type) === 'start')
   const draftInputFields = draftStart?.data?.config?.input_fields || []
   const localizedRenames: NodeRename[] = []
@@ -466,9 +467,11 @@ async function load() {
   loadedNodes = uniqueNames.nodes
   const beforeReferenceMigration = JSON.stringify(loadedNodes.map((node: any) => node.data?.config || {}))
   loadedNodes = replaceReferences(loadedNodes, [{ from: 'inputs', to: startReferenceName(loadedNodes) }])
-  const migrated = Boolean(removedSequenceNodeIds.size || localizedRenames.length || uniqueNames.renames.length || beforeReferenceMigration !== JSON.stringify(loadedNodes.map((node: any) => node.data?.config || {})))
+  const migrated = Boolean(removedKnowledgeNodeIds.size || localizedRenames.length || uniqueNames.renames.length || beforeReferenceMigration !== JSON.stringify(loadedNodes.map((node: any) => node.data?.config || {})))
   nodes.value = loadedNodes as Node[]
-  const loadedEdges = data.draft_graph.edges.filter((edge: Edge) => !removedSequenceNodeIds.has(edge.source) && !removedSequenceNodeIds.has(edge.target)).map((edge: Edge) => ({ ...edge, type: 'workflow' }))
+  const loadedEdges = data.draft_graph.edges
+    .filter((edge: Edge) => !removedKnowledgeNodeIds.has(String(edge.source)) && !removedKnowledgeNodeIds.has(String(edge.target)))
+    .map((edge: Edge) => ({ ...edge, type: 'workflow' }))
   commitEdges(loadedEdges)
   comments.value = normalizeWorkflowComments(data.draft_graph.comments)
   syncClassifierEdgeLabels()
@@ -481,15 +484,13 @@ async function load() {
   setTimeout(() => fitView({ padding: 0.2 }), 80)
 }
 async function loadResources() {
-  const [modelsResponse, scriptsResponse, datasetsResponse, workflowsResponse] = await Promise.allSettled([
+  const [modelsResponse, scriptsResponse, workflowsResponse] = await Promise.allSettled([
     api.get(`/workspaces/${workspaceId.value}/models`),
     api.get(`/workspaces/${workspaceId.value}/scripts`),
-    api.get(`/workspaces/${workspaceId.value}/knowledge`),
     api.get(`/workspaces/${workspaceId.value}/workflows`),
   ])
   modelProviders.value = modelsResponse.status === 'fulfilled' ? modelsResponse.value.data : []
   scripts.value = scriptsResponse.status === 'fulfilled' ? scriptsResponse.value.data : []
-  datasets.value = datasetsResponse.status === 'fulfilled' ? datasetsResponse.value.data : []
   subworkflows.value = workflowsResponse.status === 'fulfilled' ? workflowsResponse.value.data.filter((item: any) => item.id !== workflowId.value) : []
 }
 async function loadEnvironmentVariables() {
@@ -703,7 +704,6 @@ async function restorePublishedVersion() {
   } catch (cause: any) { saveError.value = cause.response?.data?.detail || String(cause) }
   finally { restoringVersion.value = false }
 }
-function addInputField() { if (!selected.value) return; const fields = selected.value.data.inputFields || []; selected.value.data.inputFields = [...fields, `field_${fields.length + 1}`] }
 function hasStartTrigger(trigger: string) { return selected.value?.data?.config?.triggers?.includes(trigger) }
 function toggleStartTrigger(trigger: string) { if (selected.value) selected.value.data.config.triggers = [trigger] }
 function addStartInput() {
@@ -1032,11 +1032,14 @@ function handlePaneClick(event: MouseEvent) {
   paletteOpen.value = false
   clearSelection()
 }
-function handleCanvasBackgroundClick(event: MouseEvent) {
-  const target = event.target as HTMLElement | null
-  if (!target?.classList.contains('vue-flow__pane') || annotationMode.value || commentMode.value) return
-  paletteOpen.value = false
-  clearSelection()
+function restoreBoxSelection() {
+  const selectedIds = new Set((nodes.value as any[]).filter(node => node.selected).map(node => node.id))
+  if (!selectedIds.size) return
+  clearTimeout(selectionRestoreTimer)
+  selectionRestoreTimer = setTimeout(() => {
+    nodes.value = (nodes.value as any[]).map(node => ({ ...node, selected: selectedIds.has(node.id) })) as Node[]
+    selected.value = selectedIds.size === 1 ? nodes.value.find(node => selectedIds.has(node.id)) || null : null
+  }, 0)
 }
 function handleCanvasMouseDown(event: MouseEvent) {
   if (event.button !== 1) return
@@ -1344,7 +1347,7 @@ watch(() => JSON.stringify(selected.value?.data?.config || {}), () => { if (!con
 watch(() => validationIssues.value.map(issue => `${issue.nodeId || ''}|${issue.code}|${issueText(issue)}`).join('\n'), syncValidationOverlay, { immediate: true })
 onBeforeRouteLeave(() => (!dirty.value && !saving.value) || window.confirm(t('designer.unsavedLeaveConfirm')))
 onMounted(async () => { window.addEventListener('keydown', handleKeydown); window.addEventListener('mouseup', stopMiddlePanning); window.addEventListener('blur', stopMiddlePanning); window.addEventListener('beforeunload', handleBeforeUnload); window.addEventListener('workflow-quick-add', handleQuickAdd); window.addEventListener('workflow-node-action', handleNodeAction); window.addEventListener('workflow-node-validation', handleNodeValidation); window.addEventListener('workflow-container-add', handleContainerAdd); window.addEventListener('workflow-container-delete', handleContainerDelete); window.addEventListener('workflow-edge-delete', handleEdgeDelete); await workspaces.load(); await Promise.all([load(), loadResources(), loadApprovals(), loadEnvironmentVariables()]) })
-onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.removeEventListener('keydown', handleKeydown); window.removeEventListener('mouseup', stopMiddlePanning); window.removeEventListener('blur', stopMiddlePanning); window.removeEventListener('beforeunload', handleBeforeUnload); window.removeEventListener('workflow-quick-add', handleQuickAdd); window.removeEventListener('workflow-node-action', handleNodeAction); window.removeEventListener('workflow-node-validation', handleNodeValidation); window.removeEventListener('workflow-container-add', handleContainerAdd); window.removeEventListener('workflow-container-delete', handleContainerDelete); window.removeEventListener('workflow-edge-delete', handleEdgeDelete) })
+onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTimeout(selectionRestoreTimer); window.removeEventListener('keydown', handleKeydown); window.removeEventListener('mouseup', stopMiddlePanning); window.removeEventListener('blur', stopMiddlePanning); window.removeEventListener('beforeunload', handleBeforeUnload); window.removeEventListener('workflow-quick-add', handleQuickAdd); window.removeEventListener('workflow-node-action', handleNodeAction); window.removeEventListener('workflow-node-validation', handleNodeValidation); window.removeEventListener('workflow-container-add', handleContainerAdd); window.removeEventListener('workflow-container-delete', handleContainerDelete); window.removeEventListener('workflow-edge-delete', handleEdgeDelete) })
 </script>
 
 <template>
@@ -1410,8 +1413,8 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.
       </header>
 
       <div v-if="activeSection === 'orchestration'" class="flex min-h-0 flex-1">
-        <section ref="canvasHost" class="relative min-w-0 flex-1" @click.capture="handleCanvasBackgroundClick" @mousedown="handleCanvasMouseDown" @auxclick="handleCanvasAuxClick">
-          <VueFlow v-if="loaded" v-model:nodes="nodes" v-model:edges="edges" :node-types="nodeTypes" :edge-types="edgeTypes" :default-edge-options="{ type: 'workflow' }" :is-valid-connection="validConnection" :pan-on-drag="interactionMode === 'hand' || replayMode ? [0, 1] : [1]" :selection-on-drag="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :nodes-draggable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :nodes-connectable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :elements-selectable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" fit-view-on-init class="workflow-canvas" :class="{ 'replay-mode': replayMode, 'annotation-mode': annotationMode || commentMode, 'middle-panning': middlePanning }" @node-click="event => { nodeContextMenu = null; if (!replayMode && !annotationMode && !commentMode) selectNode(event) }" @node-context-menu="openNodeContextMenu" @node-drag-stop="handleNodeDragStop" @edge-click="clearNodeSelection" @pane-click="handlePaneClick">
+        <section ref="canvasHost" class="relative min-w-0 flex-1" @mousedown="handleCanvasMouseDown" @auxclick="handleCanvasAuxClick">
+          <VueFlow v-if="loaded" v-model:nodes="nodes" v-model:edges="edges" :node-types="nodeTypes" :edge-types="edgeTypes" :default-edge-options="{ type: 'workflow' }" :is-valid-connection="validConnection" :pan-on-drag="interactionMode === 'hand' || replayMode ? [0, 1] : [1]" :selection-key-code="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode ? true : null" :nodes-draggable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :nodes-connectable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :elements-selectable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" fit-view-on-init class="workflow-canvas" :class="{ 'replay-mode': replayMode, 'annotation-mode': annotationMode || commentMode, 'middle-panning': middlePanning }" @node-click="event => { nodeContextMenu = null; if (!replayMode && !annotationMode && !commentMode) selectNode(event) }" @node-context-menu="openNodeContextMenu" @node-drag-stop="handleNodeDragStop" @selection-end="restoreBoxSelection" @edge-click="clearNodeSelection" @pane-click="handlePaneClick">
             <Background :gap="18" :size="1" pattern-color="var(--border)" />
             <MiniMap pannable zoomable position="bottom-right" />
           </VueFlow>
@@ -1520,7 +1523,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.
               </template>
               <template v-else>
                 <LlmConfigPanel v-if="selectedType === 'llm'" :config="selected.data.config" :providers="modelProviders" :variable-groups="variableGroups" :buffers="configBuffers" :errors="configFieldErrors" @structured="updateStructuredField($event.field, $event.buffer as any)" @editing="configEditing = $event" />
-                <AgentConfigPanel v-else-if="selectedType === 'agent'" :config="selected.data.config" :providers="modelProviders" :scripts="scripts" :datasets="datasets" :variable-groups="variableGroups" @provider-change="selectModelProvider" />
+                <AgentConfigPanel v-else-if="selectedType === 'agent'" :config="selected.data.config" :providers="modelProviders" :scripts="scripts" :variable-groups="variableGroups" @provider-change="selectModelProvider" />
                 <ClassifierConfigPanel v-else-if="selectedType === 'classifier'" :config="selected.data.config" :variable-groups="variableGroups" @add="addClassifierCategory" @remove="removeClassifierCategory" @connect="openPaletteForSource(selected.id, $event)" @update-keywords="updateClassifierKeywords" />
                 <CodeConfigPanel v-else-if="selectedType === 'code'" :key="selected.id" :config="selected.data.config" :variable-groups="variableGroups" @editing="configEditing = $event" />
                 <section v-else-if="selectedType === 'script'" class="mt-5 space-y-4">
@@ -1529,7 +1532,6 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.
                   <label class="field-label">{{ t('designer.scriptVersion') }}<Select v-model="selected.data.config.version" class="mt-1.5 !h-9 !text-xs"><option value="latest">{{ t('designer.followLatest') }}</option><option v-if="selectedScript" :value="selectedScript.latest_version">v{{ selectedScript.latest_version }}</option></Select></label>
                   <JsonEditorField v-model="configBuffers.scriptInputs" :label="t('designer.scriptInputs')" :error="configFieldErrors.scriptInputs" :groups="variableGroups" @input="updateStructuredField('inputs', 'scriptInputs')" />
                 </section>
-                <KnowledgeConfigPanel v-else-if="selectedType === 'knowledge'" :config="selected.data.config" :datasets="datasets" :variable-groups="variableGroups" />
                 <HttpConfigPanel v-else-if="selectedType === 'http'" :config="selected.data.config" :variable-groups="variableGroups" :buffers="configBuffers" :errors="configFieldErrors" @structured="updateStructuredField" />
                 <TemplateConfigPanel v-else-if="selectedType === 'template'" :config="selected.data.config" :variable-groups="variableGroups" />
                 <VariableAssignConfigPanel v-else-if="selectedType === 'variable'" :key="selected.id" :config="selected.data.config" :variable-groups="variableGroups" />
@@ -1553,11 +1555,9 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.
           </template>
         </WorkflowNodeInspector>
       </div>
-      <section v-else-if="activeSection === 'api'" class="min-h-0 flex-1 overflow-auto p-7"><div class="mx-auto max-w-4xl"><h2 class="text-xl font-semibold">{{ t('designer.apiTitle') }}</h2><p class="muted mt-1 text-sm">{{ t('designer.apiHint') }}</p><div class="surface mt-5 rounded-lg p-5"><div class="text-xs font-semibold">{{ t('designer.endpoints') }}</div><div class="mt-2 space-y-2"><code v-if="startNode?.data?.config?.triggers?.includes('form')" class="block rounded-md bg-slate-950 p-3 text-xs text-slate-100">GET {{ origin }}/apps/{{ workflow?.slug }}</code><code v-if="startNode?.data?.config?.triggers?.includes('api')" class="block rounded-md bg-slate-950 p-3 text-xs text-slate-100">POST {{ origin }}/v1/apps/{{ workflow?.slug }}/run</code><code v-if="startNode?.data?.config?.triggers?.includes('webhook')" class="block rounded-md bg-slate-950 p-3 text-xs text-slate-100">POST {{ origin }}/v1/apps/{{ workflow?.slug }}/webhook</code><code class="block rounded-md bg-slate-950 p-3 text-xs text-slate-100">POST {{ origin }}/v1/apps/{{ workflow?.slug }}/files</code></div><div class="mt-5 text-xs font-semibold">cURL</div><pre class="mt-2 overflow-auto rounded-md bg-slate-950 p-4 text-xs text-slate-100">curl -X POST '{{ origin }}/v1/apps/{{ workflow?.slug }}/run' \
-  -H 'Content-Type: application/json' \
-  -d '{"inputs":{"message":"Hello"}}'</pre></div></div></section>
-      <section v-else-if="activeSection === 'logs'" class="min-h-0 flex-1 overflow-auto p-7"><div class="mx-auto max-w-5xl"><div class="flex items-center"><div><h2 class="text-xl font-semibold">{{ t('designer.runLogs') }}</h2><p class="muted mt-1 text-sm">{{ t('designer.logsHint') }}</p></div><Button class="ml-auto" variant="secondary" @click="loadRuns"><Activity :size="15" />{{ t('common.refresh') }}</Button></div><div class="surface mt-5 overflow-hidden rounded-lg"><div v-for="item in runs" :key="item.id" class="grid grid-cols-[160px_110px_120px_minmax(0,1fr)] border-b border-[var(--border)] px-4 py-3 text-sm last:border-0"><span>{{ new Date(item.created_at).toLocaleString() }}</span><span>{{ t(`designer.triggerShort.${item.triggered_by || 'studio'}`) }}</span><span :class="item.status === 'succeeded' ? 'text-emerald-600' : 'text-red-600'">{{ item.status }}</span><span class="truncate font-mono text-xs">{{ item.id }}</span></div><div v-if="!runs.length" class="muted py-16 text-center text-sm">{{ t('designer.noRun') }}</div></div></div></section>
-      <section v-else class="min-h-0 flex-1 overflow-auto p-7"><div class="mx-auto max-w-5xl"><h2 class="text-xl font-semibold">{{ t('designer.monitoring') }}</h2><p class="muted mt-1 text-sm">{{ t('designer.monitorHint') }}</p><div class="mt-5 grid grid-cols-3 gap-4"><div class="surface rounded-lg p-5"><div class="muted text-xs">{{ t('designer.totalRuns') }}</div><div class="mt-2 text-3xl font-semibold">{{ runs.length }}</div></div><div class="surface rounded-lg p-5"><div class="muted text-xs">{{ t('designer.successRuns') }}</div><div class="mt-2 text-3xl font-semibold text-emerald-600">{{ runs.filter(r => r.status === 'succeeded').length }}</div></div><div class="surface rounded-lg p-5"><div class="muted text-xs">{{ t('designer.failedRuns') }}</div><div class="mt-2 text-3xl font-semibold text-red-600">{{ runs.filter(r => r.status === 'failed').length }}</div></div></div></div></section>
+      <WorkflowApiPanel v-else-if="activeSection === 'api'" :origin="origin" :slug="workflow?.slug" :triggers="startNode?.data?.config?.triggers" />
+      <WorkflowRunLogsPanel v-else-if="activeSection === 'logs'" :runs="runs" @refresh="loadRuns" />
+      <WorkflowMonitoringPanel v-else :runs="runs" />
     </div>
     <ModalShell v-model="showChangeHistory" :title="t('designer.changeHistory')" :description="t('designer.localHistoryHint')" body-class="max-h-[430px] p-2"><button v-for="entry in localHistoryEntries" :key="entry.index" class="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left hover:bg-[var(--panel-subtle)]" :class="{ 'bg-[var(--primary-soft)]': entry.index === historyIndex }" @click="restoreLocalSnapshot(entry.index)"><span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full" :class="entry.index === historyIndex ? 'bg-[var(--primary)] text-white' : 'bg-[var(--panel-subtle)] text-[var(--muted)]'"><History :size="14" /></span><span class="min-w-0 flex-1"><span class="block text-xs font-semibold">{{ entry.index === historyIndex ? t('designer.currentState') : t('designer.changeSnapshot', { index: entry.index + 1 }) }}</span><span class="muted mt-1 block text-[10px]">{{ t('designer.historyEntry', { nodes: entry.state.nodes.length, edges: entry.state.edges.length }) }}</span></span><span class="muted text-[10px]">{{ entry.time?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }}</span></button></ModalShell>
     <ModalShell v-model="showHistory" :title="t('designer.history')" :description="t('designer.versionHistoryHint')" max-width="max-w-2xl" body-class="max-h-[520px] space-y-2 p-4"><div v-for="item in versions" :key="item.id" class="rounded-lg border border-[var(--border)] p-4"><div class="flex items-start gap-3"><span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--primary-soft)] text-xs font-bold text-[var(--primary)]">v{{ item.version }}</span><div class="min-w-0 flex-1"><div class="flex items-center gap-2 text-sm font-semibold">{{ item.change_note }}<span v-if="item.id === workflow?.published_version_id" class="rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">{{ t('designer.currentPublished') }}</span></div><div class="muted mt-1 text-[10px]">{{ new Date(item.created_at).toLocaleString() }}</div><div class="mt-2 flex flex-wrap gap-1.5 text-[10px]"><span class="rounded bg-emerald-50 px-2 py-1 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">+{{ versionDiff(item).added }} {{ t('designer.nodesShort') }}</span><span class="rounded bg-red-50 px-2 py-1 text-red-700 dark:bg-red-950/30 dark:text-red-300">-{{ versionDiff(item).removed }} {{ t('designer.nodesShort') }}</span><span class="rounded bg-amber-50 px-2 py-1 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">~{{ versionDiff(item).changed }} {{ t('designer.nodesShort') }}</span><span class="rounded bg-[var(--panel-subtle)] px-2 py-1 text-[var(--muted)]">{{ versionDiff(item).versionEdges }} → {{ versionDiff(item).currentEdges }} {{ t('designer.edgesShort') }}</span></div></div><Button variant="secondary" @click="pendingRestoreVersion = item">{{ t('designer.restoreDraft') }}</Button></div></div><div v-if="!versions.length" class="muted py-12 text-center text-sm">{{ t('common.empty') }}</div></ModalShell>
@@ -1579,11 +1579,11 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); window.
 .workflow-canvas .vue-flow__minimap { right: 14px !important; bottom: 58px !important; width: 170px !important; height: 105px !important; }
 .workflow-canvas .vue-flow__edges { z-index: 6 !important; }
 .workflow-canvas .vue-flow__nodes { z-index: 3 !important; }
-.workflow-canvas .vue-flow__edge-labels { z-index: 5 !important; }
+.workflow-canvas .vue-flow__edge-labels { z-index: 7 !important; }
 .workflow-canvas.replay-mode .vue-flow__node { pointer-events: none; }
 .workflow-canvas.annotation-mode .vue-flow__pane { cursor: crosshair; }
 .workflow-canvas.middle-panning .vue-flow__pane, .workflow-canvas.middle-panning .vue-flow__node { cursor: grabbing !important; }
-.designer-sidebar { letter-spacing: 0; }.icon-button { display: inline-flex; width: 30px; height: 30px; flex: none; align-items: center; justify-content: center; border-radius: 7px; color: var(--muted); }.icon-button:hover { background: var(--panel-subtle); color: var(--text); }.side-nav { display: flex; width: 100%; height: 36px; align-items: center; gap: 10px; border-radius: 7px; padding: 0 10px; color: var(--muted); font-size: 13px; }.side-nav:hover { background: var(--panel-subtle); color: var(--text); }.side-nav.active { background: var(--primary-soft); color: var(--primary); font-weight: 600; }.workflow-canvas { background: var(--app-bg); }.workflow-canvas .vue-flow__node { border: 0; background: transparent; padding: 0; box-shadow: none; }.workflow-canvas .vue-flow__handle { width: 9px; height: 9px; border: 2px solid var(--panel); background: var(--primary); }.workflow-canvas .vue-flow__handle.quick-add-handle { width: 20px; height: 20px; border: 0; background: transparent; }.workflow-canvas .vue-flow__edge-path { stroke: #98a2b3; stroke-width: 1.5; }.canvas-mode-button { display: flex; width: 36px; height: 36px; align-items: center; justify-content: center; color: var(--muted); }.canvas-mode-button:hover { background: var(--panel-subtle); color: var(--text); }.canvas-mode-button.active { background: var(--primary-soft); color: var(--primary); }.canvas-action-row { display: flex; width: 100%; height: 32px; align-items: center; gap: 8px; border-radius: 6px; padding: 0 9px; font-size: 12px; }.canvas-action-row:hover:not(:disabled) { background: var(--panel-subtle); }.canvas-action-row:disabled { cursor: not-allowed; opacity: .4; }.inspector-tab { height: 40px; border-bottom: 2px solid transparent; padding: 0 12px; color: var(--muted); font-size: 12px; }.inspector-tab.active { border-color: var(--primary); color: var(--primary); font-weight: 600; }.field-label { display: block; color: var(--text); font-size: 12px; font-weight: 600; }.vue-flow__minimap { overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.icon-button { display: inline-flex; width: 30px; height: 30px; flex: none; align-items: center; justify-content: center; border-radius: 7px; color: var(--muted); }.icon-button:hover { background: var(--panel-subtle); color: var(--text); }.workflow-canvas { background: var(--app-bg); }.workflow-canvas .vue-flow__node { border: 0; background: transparent; padding: 0; box-shadow: none; }.workflow-canvas .vue-flow__handle { width: 9px; height: 9px; border: 2px solid var(--panel); background: var(--primary); }.workflow-canvas .vue-flow__handle.quick-add-handle { width: 20px; height: 20px; border: 0; background: transparent; }.canvas-mode-button { display: flex; width: 36px; height: 36px; align-items: center; justify-content: center; color: var(--muted); }.canvas-mode-button:hover { background: var(--panel-subtle); color: var(--text); }.canvas-mode-button.active { background: var(--primary-soft); color: var(--primary); }.canvas-action-row { display: flex; width: 100%; height: 32px; align-items: center; gap: 8px; border-radius: 6px; padding: 0 9px; font-size: 12px; }.canvas-action-row:hover:not(:disabled) { background: var(--panel-subtle); }.canvas-action-row:disabled { cursor: not-allowed; opacity: .4; }.inspector-tab { height: 40px; border-bottom: 2px solid transparent; padding: 0 12px; color: var(--muted); font-size: 12px; }.inspector-tab.active { border-color: var(--primary); color: var(--primary); font-weight: 600; }.field-label { display: block; color: var(--text); font-size: 12px; font-weight: 600; }.vue-flow__minimap { overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
 .designer-header-actions .icon-button { width: 36px; height: 36px; }.designer-header-actions .header-env-button { height: 36px; }.designer-header-actions button { transition: background-color .15s ease, border-color .15s ease, color .15s ease, filter .15s ease; }.designer-header-actions button.surface:hover:not(:disabled) { border-color: color-mix(in srgb, var(--primary), var(--border) 55%); background: var(--primary-soft); color: var(--primary); box-shadow: none; transform: none; }
 .resource-empty { border: 1px dashed var(--border); border-radius: 7px; background: var(--panel-subtle); padding: 10px; color: var(--muted); font-size: 11px; }.field-error { margin-top: 6px; color: #d92d20; font-size: 11px; }
 .canvas-history-button { display: flex; width: 34px; height: 34px; align-items: center; justify-content: center; color: var(--muted); }.canvas-history-button:hover:not(:disabled) { background: var(--panel-subtle); color: var(--primary); }.canvas-history-button:disabled { cursor: not-allowed; opacity: .35; }

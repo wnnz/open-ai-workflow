@@ -33,6 +33,7 @@ from app.schemas.workflow import (
     WorkflowUpdate,
     WorkflowVersionOut,
 )
+from app.services.model_providers import load_model_provider_runtimes
 from app.services.storage import put
 from app.services.workflow_engine import (
     WorkflowPause,
@@ -127,17 +128,17 @@ async def resolve_subworkflow_references(
         config = node.setdefault("data", {}).setdefault("config", {})
         target_id = str(config.get("workflow_id") or "")
         if not target_id:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Sub-workflow is required")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Sub-workflow is required")
         if target_id in ancestors:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Sub-workflow cycle detected")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Sub-workflow cycle detected")
         target = await db.get(Workflow, target_id)
         if not target or target.workspace_id != workspace_id or target.deleted_at is not None:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Sub-workflow not found")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Sub-workflow not found")
         if published:
             version = await db.get(WorkflowVersion, target.published_version_id) if target.published_version_id else None
             if not version or version.workspace_id != workspace_id or version.workflow_id != target.id:
                 raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
                     f"Sub-workflow '{target.name}' must be published first",
                 )
             child_graph = deepcopy(version.graph)
@@ -271,7 +272,7 @@ def validate_environment_value(value_type: str, value: str) -> None:
         try:
             float(value)
         except ValueError as exc:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Number environment variable requires a numeric value") from exc
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Number environment variable requires a numeric value") from exc
 
 
 @router.get("/{workflow_id}/environment-variables", response_model=list[WorkflowEnvironmentVariableOut])
@@ -293,9 +294,11 @@ async def create_environment_variable(workspace_id: str, workflow_id: str, paylo
         raise HTTPException(status.HTTP_409_CONFLICT, "Environment variable name already exists")
     validate_environment_value(payload.value_type, payload.value)
     variable = WorkflowEnvironmentVariable(workspace_id=workspace_id, workflow_id=workflow_id, name=payload.name, value_type=payload.value_type, encrypted_value=encrypt_secret(payload.value), description=payload.description, created_by=user.id)
-    db.add(variable); await db.flush()
+    db.add(variable)
+    await db.flush()
     db.add(audit(workspace_id, user.id, "workflow.environment_variable_created", "workflow_environment_variable", variable.id))
-    await db.commit(); await db.refresh(variable)
+    await db.commit()
+    await db.refresh(variable)
     return environment_variable_out(variable)
 
 
@@ -310,13 +313,16 @@ async def update_environment_variable(workspace_id: str, workflow_id: str, varia
     if duplicate:
         raise HTTPException(status.HTTP_409_CONFLICT, "Environment variable name already exists")
     if payload.value is None and payload.value_type != variable.value_type:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "A new value is required when changing variable type")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "A new value is required when changing variable type")
     if payload.value is not None:
         validate_environment_value(payload.value_type, payload.value)
         variable.encrypted_value = encrypt_secret(payload.value)
-    variable.name = payload.name; variable.value_type = payload.value_type; variable.description = payload.description
+    variable.name = payload.name
+    variable.value_type = payload.value_type
+    variable.description = payload.description
     db.add(audit(workspace_id, user.id, "workflow.environment_variable_updated", "workflow_environment_variable", variable.id))
-    await db.commit(); await db.refresh(variable)
+    await db.commit()
+    await db.refresh(variable)
     return environment_variable_out(variable)
 
 
@@ -532,9 +538,16 @@ async def run_draft(
         ancestors=(workflow.id,),
     )
     environment = await load_workflow_environment(db, workspace_id, workflow_id)
+    model_providers = await load_model_provider_runtimes(db, workspace_id)
     system = build_system_variables(workflow_id=workflow_id, run_id=run.id, user_id=user.id)
     try:
-        outputs, trace = execute_graph(execution_graph, payload.inputs, environment=environment, system=system)
+        outputs, trace = execute_graph(
+            execution_graph,
+            payload.inputs,
+            environment=environment,
+            system=system,
+            model_providers=model_providers,
+        )
         run.status = "succeeded"
         run.outputs = outputs
         run.trace = trace
@@ -617,7 +630,7 @@ async def respond_to_approval(
     actions = approval.request.get("actions", [])
     action = next((item for item in actions if str(item.get("id")) == payload.action_id), None)
     if not action:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Unknown approval action")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Unknown approval action")
     response = {
         "action_id": payload.action_id,
         "action_value": action.get("value", payload.action_id),
@@ -637,8 +650,16 @@ async def respond_to_approval(
     run.error = None
     try:
         environment = await load_workflow_environment(db, workspace_id, workflow_id)
+        model_providers = await load_model_provider_runtimes(db, workspace_id)
         system = build_system_variables(workflow_id=workflow_id, run_id=run.id, user_id=user.id)
-        outputs, trace = execute_graph(approval.graph, run.inputs, resume_state=resume_state, environment=environment, system=system)
+        outputs, trace = execute_graph(
+            approval.graph,
+            run.inputs,
+            resume_state=resume_state,
+            environment=environment,
+            system=system,
+            model_providers=model_providers,
+        )
         run.status = "succeeded"
         run.outputs = outputs
         run.trace = trace
@@ -689,8 +710,15 @@ async def run_draft_node(
     await db.flush()
     try:
         environment = await load_workflow_environment(db, workspace_id, workflow_id)
+        model_providers = await load_model_provider_runtimes(db, workspace_id)
         system = build_system_variables(workflow_id=workflow_id, run_id=run.id, user_id=user.id)
-        output, trace = execute_node_preview(node, payload.inputs, environment=environment, system=system)
+        output, trace = execute_node_preview(
+            node,
+            payload.inputs,
+            environment=environment,
+            system=system,
+            model_providers=model_providers,
+        )
         run.status = "succeeded"
         run.outputs = output if isinstance(output, dict) else {"value": output}
         run.trace = [trace]

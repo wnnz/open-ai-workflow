@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { BrainCircuit, Braces, Database, Globe2, Plus, Trash2, Wrench } from 'lucide-vue-next'
+import { BrainCircuit, Braces, Globe2, Plus, Trash2, Wrench } from 'lucide-vue-next'
 import VariableField from '@/components/VariableField.vue'
 import InputText from '@/volt/InputText.vue'
 import Select from '@/volt/Select.vue'
 
-const props = defineProps<{ config: any; providers: any[]; scripts: any[]; datasets: any[]; variableGroups: any[] }>()
+const props = defineProps<{ config: any; providers: any[]; scripts: any[]; variableGroups: any[] }>()
 const emit = defineEmits<{ providerChange: [] }>()
 const candidate = ref('')
 
@@ -21,7 +21,6 @@ ensureConfig()
 const candidates = computed(() => [
   { key: 'http:builtin', type: 'http', id: 'builtin', name: 'HTTP Request' },
   ...props.scripts.map(item => ({ key: `script:${item.id}`, type: 'script', id: item.id, name: item.name })),
-  ...props.datasets.map(item => ({ key: `knowledge:${item.id}`, type: 'knowledge', id: item.id, name: item.name })),
 ])
 
 function addTool() {
@@ -31,7 +30,7 @@ function addTool() {
   candidate.value = ''
 }
 function removeTool(id: string) { props.config.tools = props.config.tools.filter((tool: any) => tool.id !== id) }
-function toolIcon(type: string) { return type === 'script' ? Braces : type === 'knowledge' ? Database : Globe2 }
+function toolIcon(type: string) { return type === 'script' ? Braces : Globe2 }
 </script>
 
 <template>

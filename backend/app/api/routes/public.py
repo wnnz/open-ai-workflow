@@ -17,6 +17,7 @@ from app.models.entities import (
     WorkflowVersion,
 )
 from app.schemas.workflow import RunIn
+from app.services.model_providers import load_model_provider_runtimes
 from app.services.storage import put
 from app.services.workflow_engine import WorkflowPause, execute_graph
 from app.services.workflow_environment import build_system_variables, load_workflow_environment
@@ -105,8 +106,15 @@ async def execute_published(
     await db.flush()
     try:
         environment = await load_workflow_environment(db, workflow.workspace_id, workflow.id)
+        model_providers = await load_model_provider_runtimes(db, workflow.workspace_id)
         system = build_system_variables(workflow_id=workflow.id, run_id=run.id, user_id=payload.user)
-        outputs, trace = execute_graph(version.graph, payload.inputs, environment=environment, system=system)
+        outputs, trace = execute_graph(
+            version.graph,
+            payload.inputs,
+            environment=environment,
+            system=system,
+            model_providers=model_providers,
+        )
         run.status = "succeeded"
         run.outputs = outputs
         run.trace = trace
@@ -133,7 +141,7 @@ async def execute_published(
         run.error = str(exc)
         run.finished_at = datetime.now(UTC)
         await db.commit()
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     except Exception as exc:
         run.status = "failed"
         run.error = str(exc)

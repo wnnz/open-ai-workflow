@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.core.config import get_settings
 from app.core.database import SessionLocal, engine
 from app.models.entities import Workflow, WorkflowApproval, WorkflowRun, WorkflowVersion
+from app.services.model_providers import load_model_provider_runtimes
 from app.services.workflow_engine import WorkflowPause, execute_graph
 from app.services.workflow_environment import build_system_variables, load_workflow_environment
 
@@ -93,8 +94,15 @@ async def _dispatch_schedules() -> int:
             await db.flush()
             try:
                 environment = await load_workflow_environment(db, workflow.workspace_id, workflow.id)
+                model_providers = await load_model_provider_runtimes(db, workflow.workspace_id)
                 system = build_system_variables(workflow_id=workflow.id, run_id=run.id)
-                run.outputs, run.trace = execute_graph(version.graph, inputs, environment=environment, system=system)
+                run.outputs, run.trace = execute_graph(
+                    version.graph,
+                    inputs,
+                    environment=environment,
+                    system=system,
+                    model_providers=model_providers,
+                )
                 run.status = "succeeded"
                 run.finished_at = datetime.now(UTC)
             except WorkflowPause as pause:

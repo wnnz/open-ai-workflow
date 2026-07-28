@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict, deque
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait as wait_for_futures
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor
+from concurrent.futures import wait as wait_for_futures
 from copy import deepcopy
 from datetime import UTC, datetime
 from time import sleep
@@ -17,12 +18,13 @@ from jinja2 import StrictUndefined, TemplateError
 from jinja2.sandbox import SandboxedEnvironment
 
 from app.core.config import get_settings
+from app.services.model_execution import execute_agent, execute_extractor, execute_llm
 from app.services.scripts import validate_script
 
 VARIABLE = re.compile(r"\{\{\s*([^{}\r\n]+?)\s*\}\}")
 EXECUTION_POLICY_NODE_TYPES = {
     "llm", "agent", "code", "script", "template", "variable", "json", "aggregate",
-    "extract", "list", "knowledge", "http", "iteration", "loop",
+    "extract", "list", "http", "iteration", "loop",
     "delay", "subworkflow", "document",
 }
 
@@ -42,16 +44,18 @@ def node_reference_name(node: dict[str, Any]) -> str:
 def validate_node_names(nodes: list[dict[str, Any]]) -> None:
     names: set[str] = set()
     for node in nodes:
+        if node.get("type") == "knowledge":
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Knowledge nodes are no longer supported")
         name = node_reference_name(node)
         if not name:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Every node requires a name")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Every node requires a name")
         if any(character in name for character in ".{}"):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Node names cannot contain '.', '{', or '}'")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Node names cannot contain '.', '{', or '}'")
         key = name.casefold()
         if key in {"inputs", "env", "sys"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Node name is reserved")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Node name is reserved")
         if key in names:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Graph requires unique node names")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Graph requires unique node names")
         names.add(key)
 
 
@@ -67,16 +71,16 @@ def validate_draft_graph(graph: dict[str, Any]) -> None:
     nodes = graph.get("nodes", [])
     edges = graph.get("edges", [])
     if not isinstance(nodes, list) or not isinstance(edges, list):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Graph nodes and edges must be arrays")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Graph nodes and edges must be arrays")
     node_ids = [node.get("id") for node in nodes]
     if not node_ids or None in node_ids or len(set(node_ids)) != len(node_ids):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Graph requires unique node ids")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Graph requires unique node ids")
     validate_node_names(nodes)
     top_level_nodes = [node for node in nodes if not node.get("parentNode")]
     if len([node for node in top_level_nodes if node.get("type") == "start"]) != 1:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Graph requires exactly one start node")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Graph requires exactly one start node")
     if not any(node.get("type") == "end" for node in top_level_nodes):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Graph requires an end node")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Graph requires an end node")
     validate_start_config(next(node for node in top_level_nodes if node.get("type") == "start").get("data", {}).get("config", {}))
     for end_node in (node for node in top_level_nodes if node.get("type") == "end"):
         validate_end_config(end_node.get("data", {}).get("config", {}))
@@ -85,34 +89,34 @@ def validate_draft_graph(graph: dict[str, Any]) -> None:
     for node in nodes:
         parent_id = node.get("parentNode")
         if parent_id and node_types.get(parent_id) not in {"iteration", "loop"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Nested nodes require an iteration or loop parent")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Nested nodes require an iteration or loop parent")
         if parent_id and node.get("type") in {"start", "end", "human", "iteration", "loop", "note"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Unsupported nested node type")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Unsupported nested node type")
     for edge in edges:
         if edge.get("source") not in node_ids or edge.get("target") not in node_ids:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Edge references an unknown node")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Edge references an unknown node")
         if node_types.get(edge.get("source")) == "note" or node_types.get(edge.get("target")) == "note":
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Annotations cannot be connected")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Annotations cannot be connected")
         if node_parents.get(edge.get("source")) != node_parents.get(edge.get("target")):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Edges cannot cross a container boundary")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Edges cannot cross a container boundary")
 def validate_graph(graph: dict[str, Any]) -> None:
     nodes = graph.get("nodes", [])
     edges = graph.get("edges", [])
     if not isinstance(nodes, list) or not isinstance(edges, list):
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "Graph nodes and edges must be arrays"
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "Graph nodes and edges must be arrays"
         )
     node_ids = [node.get("id") for node in nodes]
     if not node_ids or None in node_ids or len(set(node_ids)) != len(node_ids):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Graph requires unique node ids")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Graph requires unique node ids")
     top_level_nodes = [node for node in nodes if not node.get("parentNode")]
     if not any(node.get("type") == "start" for node in top_level_nodes):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Graph requires a start node")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Graph requires a start node")
     if not any(node.get("type") == "end" for node in top_level_nodes):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Graph requires an end node")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Graph requires an end node")
     start_nodes = [node for node in top_level_nodes if node.get("type") == "start"]
     if len(start_nodes) != 1:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Graph requires exactly one start node")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Graph requires exactly one start node")
     validate_start_config(start_nodes[0].get("data", {}).get("config", {}))
     for end_node in (node for node in top_level_nodes if node.get("type") == "end"):
         validate_end_config(end_node.get("data", {}).get("config", {}))
@@ -124,8 +128,6 @@ def validate_graph(graph: dict[str, Any]) -> None:
         validate_code_config(code_node.get("data", {}).get("config", {}))
     for llm_node in (node for node in nodes if node.get("type") == "llm"):
         validate_llm_config(llm_node.get("data", {}).get("config", {}))
-    for knowledge_node in (node for node in nodes if node.get("type") == "knowledge"):
-        validate_knowledge_config(knowledge_node.get("data", {}).get("config", {}))
     for http_node in (node for node in nodes if node.get("type") == "http"):
         validate_http_config(http_node.get("data", {}).get("config", {}))
     for document_node in (node for node in nodes if node.get("type") == "document"):
@@ -157,26 +159,26 @@ def validate_graph(graph: dict[str, Any]) -> None:
     for node in nodes:
         parent_id = node.get("parentNode")
         if parent_id and node_types.get(parent_id) not in {"iteration", "loop"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Nested nodes require an iteration or loop parent")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Nested nodes require an iteration or loop parent")
         if parent_id and node.get("type") in {"start", "end", "human", "iteration", "loop", "note"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Unsupported nested node type")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Unsupported nested node type")
     for container in (node for node in nodes if node.get("type") in {"iteration", "loop"}):
         if not any(node.get("parentNode") == container.get("id") for node in nodes):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Containers require at least one child node")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Containers require at least one child node")
     for edge in edges:
         if edge.get("source") not in node_ids or edge.get("target") not in node_ids:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, "Edge references an unknown node"
+                status.HTTP_422_UNPROCESSABLE_CONTENT, "Edge references an unknown node"
             )
         if node_types.get(edge.get("source")) == "note" or node_types.get(edge.get("target")) == "note":
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, "Annotations cannot be connected"
+                status.HTTP_422_UNPROCESSABLE_CONTENT, "Annotations cannot be connected"
             )
         if node_parents.get(edge.get("source")) != node_parents.get(edge.get("target")):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Edges cannot cross a container boundary")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Edges cannot cross a container boundary")
     for wait_node in (node for node in nodes if node.get("type") == "wait"):
         if len([edge for edge in edges if edge.get("target") == wait_node.get("id")]) < 2:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Wait nodes require at least two incoming branches")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Wait nodes require at least two incoming branches")
     for classifier_node in (node for node in nodes if node.get("type") == "classifier"):
         category_handles = {
             f"category:{category['id']}"
@@ -189,12 +191,12 @@ def validate_graph(graph: dict[str, Any]) -> None:
         }
         if not category_handles <= connected_handles:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "Every classifier category requires a connected branch",
             )
         if connected_handles - category_handles:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "Classifier contains an unknown category branch",
             )
     for human_node in (node for node in nodes if node.get("type") == "human"):
@@ -210,7 +212,7 @@ def validate_graph(graph: dict[str, Any]) -> None:
         connected_actions = {handle for handle in connected_handles if handle.startswith("action:")}
         if connected_actions and action_handles != connected_actions:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "Every human action requires a connected branch",
             )
     for policy_node in (node for node in nodes if node.get("type") in EXECUTION_POLICY_NODE_TYPES):
@@ -221,40 +223,40 @@ def validate_graph(graph: dict[str, Any]) -> None:
         ]
         if config.get("error_strategy", "fail") == "error_branch" and not error_edges:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "Error branch strategy requires a connected error branch",
             )
         if config.get("error_strategy", "fail") != "error_branch" and error_edges:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "Error branch is connected but the node does not use the error branch strategy",
             )
 
 
 def validate_subworkflow_config(config: dict[str, Any]) -> None:
     if not isinstance(config.get("workflow_id"), str) or not config["workflow_id"].strip():
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Sub-workflow is required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Sub-workflow is required")
     if not isinstance(config.get("inputs", {}), dict):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Sub-workflow inputs must be an object")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Sub-workflow inputs must be an object")
     resolved_graph = config.get("_resolved_graph")
     if resolved_graph is not None and not isinstance(resolved_graph, dict):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid resolved sub-workflow")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid resolved sub-workflow")
 
 
 def validate_start_config(config: dict[str, Any]) -> None:
     triggers = config.get("triggers", ["form", "api"])
     allowed_triggers = {"form", "api", "webhook", "schedule"}
     if not isinstance(triggers, list) or len(triggers) != 1 or not set(triggers) <= allowed_triggers:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid start triggers")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid start triggers")
     fields = config.get("input_fields", [])
     allowed_types = {"text", "textarea", "number", "select", "file", "files"}
     names: list[str] = []
     for field in fields:
         name = str(field.get("name", ""))
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid input field name")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid input field name")
         if field.get("type", "text") not in allowed_types:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid input field type")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid input field type")
         if field.get("type") == "select":
             options = field.get("options", [])
             if (
@@ -264,92 +266,92 @@ def validate_start_config(config: dict[str, Any]) -> None:
                 or len(options) != len(set(options))
             ):
                 raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_ENTITY, "Select field options must be unique and non-empty"
+                    status.HTTP_422_UNPROCESSABLE_CONTENT, "Select field options must be unique and non-empty"
                 )
             if field.get("default_value") not in (None, "") and field["default_value"] not in options:
                 raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_ENTITY, "Select field default must be one of its options"
+                    status.HTTP_422_UNPROCESSABLE_CONTENT, "Select field default must be one of its options"
                 )
         max_length = field.get("max_length")
         if max_length is not None and (
             not isinstance(max_length, int) or max_length < 1 or max_length > 100_000
         ):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid input field max length")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid input field max length")
         if field.get("type") == "number":
             minimum, maximum = field.get("min"), field.get("max")
             if minimum is not None and not isinstance(minimum, (int, float)):
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid number field minimum")
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid number field minimum")
             if maximum is not None and not isinstance(maximum, (int, float)):
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid number field maximum")
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid number field maximum")
             if minimum is not None and maximum is not None and minimum > maximum:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Number field minimum exceeds maximum")
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Number field minimum exceeds maximum")
         names.append(name)
     if len(names) != len(set(names)):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Input field names must be unique")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Input field names must be unique")
     if "schedule" in triggers:
         schedule = config.get("schedule", {})
         expression = schedule.get("cron", "")
         if not croniter.is_valid(expression):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid schedule cron expression")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid schedule cron expression")
         try:
             ZoneInfo(schedule.get("timezone", "UTC"))
         except ZoneInfoNotFoundError as exc:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid schedule timezone") from exc
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid schedule timezone") from exc
         try:
             schedule_inputs = json.loads(schedule.get("inputs_json", "{}"))
         except json.JSONDecodeError as exc:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid schedule inputs JSON") from exc
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid schedule inputs JSON") from exc
         if not isinstance(schedule_inputs, dict):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Schedule inputs must be an object")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Schedule inputs must be an object")
 
 
 def validate_template_config(config: dict[str, Any]) -> None:
     template = config.get("template")
     if not isinstance(template, str) or not template.strip():
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Template content is required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Template content is required")
     inputs = config.get("inputs", [])
     if not isinstance(inputs, list):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Template inputs must be an array")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Template inputs must be an array")
     names: list[str] = []
     for item in inputs:
         if not isinstance(item, dict):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid template input")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid template input")
         name = str(item.get("name", ""))
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid template input name")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid template input name")
         if not isinstance(item.get("value"), str) or not item["value"].strip():
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Template input value is required")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Template input value is required")
         names.append(name)
     if len(names) != len(set(names)):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Template input names must be unique")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Template input names must be unique")
     try:
         SandboxedEnvironment(undefined=StrictUndefined, autoescape=False).parse(template)
     except TemplateError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid Jinja2 template") from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid Jinja2 template") from exc
 
 
 def validate_aggregate_config(config: dict[str, Any]) -> None:
     if config.get("group_enabled", False):
         groups = config.get("groups", [])
         if not isinstance(groups, list) or not groups:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Aggregation groups are required")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Aggregation groups are required")
         names: list[str] = []
         for group in groups:
             if not isinstance(group, dict):
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid aggregation group")
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid aggregation group")
             name = str(group.get("name", ""))
             variables = group.get("variables", [])
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name):
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid aggregation group name")
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid aggregation group name")
             if not isinstance(variables, list) or not any(isinstance(value, str) and value.strip() for value in variables):
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Aggregation group variables are required")
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Aggregation group variables are required")
             names.append(name)
         if len(names) != len(set(names)):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Aggregation group names must be unique")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Aggregation group names must be unique")
         return
     variables = config.get("variables", [])
     if not isinstance(variables, list) or not any(isinstance(value, str) and value.strip() for value in variables):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Aggregation variables are required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Aggregation variables are required")
 
 
 def validate_variable_config(config: dict[str, Any]) -> None:
@@ -357,94 +359,94 @@ def validate_variable_config(config: dict[str, Any]) -> None:
     if assignments is None and isinstance(config.get("values"), dict) and config["values"]:
         return
     if not isinstance(assignments, list) or not assignments:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Variable assignments are required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Variable assignments are required")
     names: list[str] = []
     for assignment in assignments:
         if not isinstance(assignment, dict):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid variable assignment")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid variable assignment")
         name = str(assignment.get("name", ""))
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid variable assignment name")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid variable assignment name")
         if assignment.get("type", "Any") not in {"String", "Number", "Boolean", "Object", "Array", "Any"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid variable assignment type")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid variable assignment type")
         operation = assignment.get("operation", "overwrite")
         if operation not in {"overwrite", "append", "extend", "clear"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid variable assignment operation")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid variable assignment operation")
         if operation != "clear" and "value" not in assignment:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Variable assignment value is required")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Variable assignment value is required")
         names.append(name)
     if len(names) != len(set(names)):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Variable assignment names must be unique")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Variable assignment names must be unique")
 
 
 def validate_extract_config(config: dict[str, Any]) -> None:
     if not isinstance(config.get("source"), str) or not config["source"].strip():
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Extraction input is required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Extraction input is required")
     if not isinstance(config.get("model"), str) or not config["model"].strip():
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Extraction model is required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Extraction model is required")
     fields = config.get("fields")
     if not isinstance(fields, list) or not fields:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Extraction fields are required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Extraction fields are required")
     names: list[str] = []
     for field in fields:
         if not isinstance(field, dict):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid extraction field")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid extraction field")
         name = str(field.get("name", ""))
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid extraction field name")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid extraction field name")
         if field.get("type", "String") not in {"String", "Number", "Boolean", "Object", "Array"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid extraction field type")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid extraction field type")
         names.append(name)
     if len(names) != len(set(names)):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Extraction field names must be unique")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Extraction field names must be unique")
     vision = config.get("vision", {"enabled": False})
     if not isinstance(vision, dict) or not isinstance(vision.get("enabled", False), bool):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid extraction vision config")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid extraction vision config")
     if vision.get("enabled") and not str(vision.get("variable", "")).strip():
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Extraction vision variable is required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Extraction vision variable is required")
 
 
 def validate_list_config(config: dict[str, Any]) -> None:
     if "source" not in config or config.get("source") in (None, ""):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "List source is required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "List source is required")
     filter_config = config.get("filter", {})
     allowed_operators = {"equals", "not_equals", "contains", "not_contains", "greater_than", "less_than", "is_empty", "is_not_empty"}
     if filter_config.get("enabled") and filter_config.get("operator", "equals") not in allowed_operators:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid list filter operator")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid list filter operator")
     nth = config.get("nth", {})
     if nth.get("enabled") and (not isinstance(nth.get("index"), int) or nth["index"] < 1):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid list item position")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid list item position")
     limit = config.get("limit", {})
     if limit.get("enabled") and (not isinstance(limit.get("count"), int) or limit["count"] < 0):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid list limit")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid list limit")
     sort_config = config.get("sort", {})
     if sort_config.get("enabled") and sort_config.get("order", "asc") not in {"asc", "desc"}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid list sort order")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid list sort order")
 
 
 def validate_iteration_config(config: dict[str, Any]) -> None:
     if config.get("source") in (None, ""):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Iteration source is required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Iteration source is required")
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", str(config.get("item_variable", "item"))):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid iteration item variable")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid iteration item variable")
     if config.get("mode", "sequential") not in {"sequential", "parallel"}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid iteration mode")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid iteration mode")
     concurrency = config.get("concurrency", 1)
     if not isinstance(concurrency, int) or not 1 <= concurrency <= 20:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid iteration concurrency")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid iteration concurrency")
 
 
 def validate_loop_config(config: dict[str, Any]) -> None:
     if config.get("condition") in (None, ""):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Loop condition is required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Loop condition is required")
     maximum = config.get("max_iterations", 10)
     if not isinstance(maximum, int) or not 1 <= maximum <= 100:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid loop iteration limit")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid loop iteration limit")
 
 
 def validate_wait_config(config: dict[str, Any]) -> None:
     if config.get("mode", "all") not in {"all", "any"}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid wait mode")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid wait mode")
 
 
 def normalized_human_actions(config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -459,10 +461,10 @@ def normalized_human_actions(config: dict[str, Any]) -> list[dict[str, Any]]:
 
 def validate_human_config(config: dict[str, Any]) -> None:
     if not str(config.get("form_content") or config.get("instructions") or "").strip():
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Human form content is required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Human form content is required")
     methods = config.get("submission_methods", ["studio"])
     if not isinstance(methods, list) or not methods or not set(methods) <= {"studio", "link", "email"}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid human submission methods")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid human submission methods")
     actions = normalized_human_actions(config)
     action_ids = [str(action.get("id", "")) for action in actions]
     if (
@@ -470,38 +472,38 @@ def validate_human_config(config: dict[str, Any]) -> None:
         or len(action_ids) != len(set(action_ids))
         or any(not str(action.get("label", "")).strip() for action in actions)
     ):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid human actions")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid human actions")
     timeout_minutes = config.get("timeout_minutes", 4320)
     if not isinstance(timeout_minutes, int) or not 1 <= timeout_minutes <= 525600:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid human timeout")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid human timeout")
 
 
 def validate_end_config(config: dict[str, Any]) -> None:
     outputs = config.get("outputs")
     if isinstance(outputs, list):
         if not outputs:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "End node requires an output")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "End node requires an output")
         names: list[str] = []
         allowed_types = {"String", "Number", "Boolean", "Object", "Array", "File", "Any"}
         for output in outputs:
             if not isinstance(output, dict):
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid end output")
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid end output")
             name = str(output.get("name", ""))
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name):
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid end output name")
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid end output name")
             if output.get("type", "Any") not in allowed_types:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid end output type")
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid end output type")
             if "value" not in output or output.get("value") in (None, ""):
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "End output value is required")
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "End output value is required")
             names.append(name)
         if len(names) != len(set(names)):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "End output names must be unique")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "End output names must be unique")
         return
     if isinstance(outputs, dict) and outputs:
         return
     if isinstance(outputs, str) and outputs.strip():
         return
-    raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "End node requires an output")
+    raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "End node requires an output")
 
 
 def validate_condition_config(config: dict[str, Any]) -> None:
@@ -513,53 +515,53 @@ def validate_condition_config(config: dict[str, Any]) -> None:
             "is_not_empty", "in",
         }
         if config.get("logical_operator", "and") not in {"and", "or"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid condition logical operator")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid condition logical operator")
         for clause in conditions:
             if not isinstance(clause, dict) or clause.get("operator") not in allowed_operators:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid condition clause")
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid condition clause")
             if clause.get("variable") in (None, ""):
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Condition variable is required")
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Condition variable is required")
             if clause.get("operator") not in {"is_empty", "is_not_empty"} and clause.get("value") is None:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Condition value is required")
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Condition value is required")
         return
     if isinstance(config.get("expression"), str) and config["expression"].strip():
         return
-    raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Condition requires at least one clause")
+    raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Condition requires at least one clause")
 
 
 def validate_classifier_config(config: dict[str, Any]) -> None:
     if config.get("input") in (None, ""):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Classifier input is required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Classifier input is required")
     categories = config.get("categories")
     if not isinstance(categories, list) or len(categories) < 2:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Classifier requires at least two categories")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Classifier requires at least two categories")
     ids: list[str] = []
     names: list[str] = []
     for category in categories:
         if not isinstance(category, dict):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid classifier category")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid classifier category")
         category_id = str(category.get("id", ""))
         name = str(category.get("name", "")).strip()
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", category_id) or not name:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid classifier category")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid classifier category")
         keywords = category.get("keywords", [])
         if not isinstance(keywords, list) or any(not isinstance(keyword, str) or not keyword.strip() for keyword in keywords):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid classifier category keywords")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid classifier category keywords")
         if not isinstance(category.get("description", ""), str):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid classifier category description")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid classifier category description")
         ids.append(category_id)
         names.append(name.casefold())
     if len(ids) != len(set(ids)) or len(names) != len(set(names)):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Classifier categories must be unique")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Classifier categories must be unique")
 
 
 def validate_code_config(config: dict[str, Any]) -> None:
     inputs = config.get("inputs", [])
     outputs = config.get("outputs", [])
     if not isinstance(inputs, list):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Code inputs must be an array")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Code inputs must be an array")
     if not isinstance(outputs, list) or not outputs:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Code outputs are required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Code outputs are required")
     allowed_input_types = {"String", "Number", "Boolean", "Object", "Array", "Any"}
     allowed_output_types = allowed_input_types | {"File"}
     input_names: list[str] = []
@@ -567,23 +569,23 @@ def validate_code_config(config: dict[str, Any]) -> None:
     for item in inputs:
         name = str(item.get("name", "")) if isinstance(item, dict) else ""
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name) or item.get("type", "Any") not in allowed_input_types or "value" not in item:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid code input")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid code input")
         input_names.append(name)
     for item in outputs:
         name = str(item.get("name", "")) if isinstance(item, dict) else ""
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name) or item.get("type", "Any") not in allowed_output_types:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid code output")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid code output")
         output_names.append(name)
     if len(input_names) != len(set(input_names)) or len(output_names) != len(set(output_names)):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Code input and output names must be unique")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Code input and output names must be unique")
     timeout_seconds = config.get("timeout_seconds", 30)
     memory_mb = config.get("memory_mb", 256)
     if not isinstance(timeout_seconds, int) or not 1 <= timeout_seconds <= 300:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid code timeout")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid code timeout")
     if not isinstance(memory_mb, int) or not 64 <= memory_mb <= 2048:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid code memory limit")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid code memory limit")
     if not isinstance(config.get("network_enabled", False), bool):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid code network setting")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid code network setting")
     validate_script(
         str(config.get("source", "")),
         str(config.get("entrypoint", "main")),
@@ -594,7 +596,7 @@ def validate_code_config(config: dict[str, Any]) -> None:
 
 def validate_llm_config(config: dict[str, Any]) -> None:
     if not isinstance(config.get("model"), str) or not config["model"].strip():
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "LLM model is required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "LLM model is required")
     messages = config.get("messages")
     if isinstance(messages, list) and messages:
         if any(
@@ -604,189 +606,136 @@ def validate_llm_config(config: dict[str, Any]) -> None:
             or not message["content"].strip()
             for message in messages
         ):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid LLM prompt message")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid LLM prompt message")
     elif not isinstance(config.get("prompt"), str) or not config["prompt"].strip():
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "LLM prompt messages are required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "LLM prompt messages are required")
     temperature = config.get("temperature", 0.7)
     top_p = config.get("top_p", 1)
     max_tokens = config.get("max_tokens", 1024)
     if not isinstance(temperature, (int, float)) or not 0 <= temperature <= 2:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid LLM temperature")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid LLM temperature")
     if not isinstance(top_p, (int, float)) or not 0 <= top_p <= 1:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid LLM top_p")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid LLM top_p")
     if not isinstance(max_tokens, int) or not 1 <= max_tokens <= 128_000:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid LLM max tokens")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid LLM max tokens")
     response_format = config.get("response_format", "text")
     if response_format not in {"text", "json_object", "json_schema"}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid LLM response format")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid LLM response format")
     if response_format == "json_schema" and not isinstance(config.get("response_schema"), dict):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "LLM response schema is required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "LLM response schema is required")
     context = config.get("context", "")
     if not isinstance(context, str):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "LLM context must be text")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "LLM context must be text")
     vision = config.get("vision", {"enabled": False})
     if not isinstance(vision, dict) or not isinstance(vision.get("enabled", False), bool):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid LLM vision config")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid LLM vision config")
     if vision.get("detail", "high") not in {"auto", "high", "low"}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid LLM vision detail")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid LLM vision detail")
     if vision.get("enabled") and (not isinstance(vision.get("variable"), str) or not vision["variable"].strip()):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "LLM vision variable is required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "LLM vision variable is required")
     reasoning = config.get("reasoning", {"separate": False})
     if not isinstance(reasoning, dict) or not isinstance(reasoning.get("separate", False), bool):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid LLM reasoning config")
-
-
-def validate_knowledge_config(config: dict[str, Any]) -> None:
-    dataset_ids = config.get("dataset_ids")
-    if dataset_ids is None:
-        dataset_ids = [config.get("dataset_id")] if config.get("dataset_id") else []
-    if (
-        not isinstance(dataset_ids, list)
-        or not 1 <= len(dataset_ids) <= 20
-        or any(not isinstance(dataset_id, str) or not dataset_id.strip() for dataset_id in dataset_ids)
-        or len(dataset_ids) != len(set(dataset_ids))
-    ):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Knowledge datasets are required")
-    if not isinstance(config.get("query"), str) or not config["query"].strip():
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Knowledge query is required")
-    retrieval_mode = config.get("retrieval_mode", "hybrid")
-    if retrieval_mode not in {"hybrid", "vector", "fulltext"}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid knowledge retrieval mode")
-    top_k = config.get("top_k", 5)
-    if not isinstance(top_k, int) or not 1 <= top_k <= 100:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid knowledge Top K")
-    rerank = config.get("rerank", {"mode": "weighted", "semantic_weight": 0.7})
-    if not isinstance(rerank, dict) or rerank.get("mode", "weighted") not in {"weighted", "model"}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid knowledge rerank config")
-    if rerank.get("mode", "weighted") == "weighted":
-        semantic_weight = rerank.get("semantic_weight", 0.7)
-        if not isinstance(semantic_weight, (int, float)) or not 0 <= semantic_weight <= 1:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid knowledge semantic weight")
-    elif not isinstance(rerank.get("model_name"), str) or not rerank["model_name"].strip():
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Knowledge rerank model is required")
-    score_threshold = config.get("score_threshold", {"enabled": False, "value": config.get("threshold", 0.2)})
-    if not isinstance(score_threshold, dict) or not isinstance(score_threshold.get("enabled", False), bool):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid knowledge score threshold")
-    threshold_value = score_threshold.get("value", 0.2)
-    if not isinstance(threshold_value, (int, float)) or not 0 <= threshold_value <= 1:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid knowledge score threshold")
-    metadata_filter = config.get("metadata_filter", {"enabled": False, "conditions": []})
-    if not isinstance(metadata_filter, dict) or not isinstance(metadata_filter.get("enabled", False), bool):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid knowledge metadata filter")
-    if metadata_filter.get("logical_operator", "and") not in {"and", "or"}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid knowledge metadata operator")
-    conditions = metadata_filter.get("conditions", [])
-    if not isinstance(conditions, list) or len(conditions) > 50:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid knowledge metadata conditions")
-    if metadata_filter.get("enabled") and any(
-        not isinstance(condition, dict)
-        or not isinstance(condition.get("key"), str)
-        or not condition["key"].strip()
-        or condition.get("operator") not in {"equals", "not_equals", "contains", "in"}
-        or not isinstance(condition.get("value"), str)
-        for condition in conditions
-    ):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid knowledge metadata condition")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid LLM reasoning config")
 
 
 def validate_http_config(config: dict[str, Any]) -> None:
     method = str(config.get("method", "GET")).upper()
     if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid HTTP method")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid HTTP method")
     url = str(config.get("url", "")).strip()
     is_variable_url = bool(re.fullmatch(r"\{\{[^{}]+\}\}", url))
     if not is_variable_url and not re.fullmatch(r"https?://[^\s]+", url, re.IGNORECASE):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "HTTP URL must use http or https")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "HTTP URL must use http or https")
     timeout_seconds = config.get("timeout_seconds", 30)
     if not isinstance(timeout_seconds, (int, float)) or not 1 <= timeout_seconds <= 300:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid HTTP timeout")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid HTTP timeout")
     for field in ("headers", "query"):
         value = config.get(field, {})
         if not isinstance(value, dict):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"HTTP {field} must be an object")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"HTTP {field} must be an object")
     body_type = config.get("body_type", "json")
     if body_type not in {"none", "json", "raw", "form"}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid HTTP body type")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid HTTP body type")
     body = config.get("body")
     if body_type == "raw" and body is not None and not isinstance(body, str):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Raw HTTP body must be text")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Raw HTTP body must be text")
     if body_type == "form" and body is not None and not isinstance(body, dict):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Form HTTP body must be an object")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Form HTTP body must be an object")
     auth = config.get("auth", {"type": "none"})
     if not isinstance(auth, dict) or auth.get("type", "none") not in {"none", "bearer", "basic", "api_key"}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid HTTP authentication")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid HTTP authentication")
     if auth.get("type") == "bearer" and auth.get("token") in (None, ""):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Bearer token is required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Bearer token is required")
     if auth.get("type") == "basic" and auth.get("username") in (None, ""):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Basic auth username is required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Basic auth username is required")
     if auth.get("type") == "api_key":
         if auth.get("key") in (None, "") or auth.get("value") in (None, ""):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "API key name and value are required")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "API key name and value are required")
         if auth.get("location", "header") not in {"header", "query"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid API key location")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid API key location")
     max_response_bytes = config.get("max_response_bytes", 2_000_000)
     if not isinstance(max_response_bytes, int) or not 1024 <= max_response_bytes <= 10_000_000:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid HTTP response size limit")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid HTTP response size limit")
 
 
 def validate_document_config(config: dict[str, Any]) -> None:
     operation = config.get("operation", "extract")
     if operation not in {"extract", "create", "convert", "merge", "split", "ocr"}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid document operation")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document operation")
     if operation == "create":
         if not isinstance(config.get("content"), str) or not config["content"].strip():
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Document content is required")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Document content is required")
         if config.get("format", "docx") not in {"docx", "xlsx", "pptx", "pdf"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid document output format")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document output format")
     elif operation == "merge":
         if not isinstance(config.get("sources"), str) or not config["sources"].strip():
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Document source files are required")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Document source files are required")
         if config.get("output_format", "pdf") not in {"pdf", "docx"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid document merge format")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document merge format")
     else:
         if not isinstance(config.get("source"), str) or not config["source"].strip():
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Document source file is required")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Document source file is required")
     if operation == "extract":
         if config.get("extract_mode", "text") not in {"text", "text_tables", "text_images"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid document extraction mode")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document extraction mode")
         if not isinstance(config.get("ocr_fallback", True), bool):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid document OCR fallback")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document OCR fallback")
     elif operation == "convert":
         if config.get("target_format", "pdf") not in {"pdf", "docx", "xlsx", "pptx", "txt", "html", "images"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid document target format")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document target format")
         if not isinstance(config.get("preserve_layout", True), bool):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid document layout setting")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document layout setting")
     elif operation == "split":
         split_mode = config.get("split_mode", "pages")
         if split_mode not in {"pages", "ranges", "sheets", "slides"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid document split mode")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document split mode")
         if split_mode == "ranges" and (not isinstance(config.get("ranges"), str) or not config["ranges"].strip()):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Document split ranges are required")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Document split ranges are required")
     elif operation == "ocr":
         if not isinstance(config.get("languages", "chi_sim+eng"), str) or not config.get("languages", "").strip():
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Document OCR languages are required")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Document OCR languages are required")
         if config.get("ocr_output_format", "text") not in {"text", "searchable_pdf", "json"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid document OCR output format")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document OCR output format")
         if not isinstance(config.get("deskew", True), bool):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid document deskew setting")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document deskew setting")
 
 
 def validate_execution_policy(config: dict[str, Any]) -> None:
     retry = config.get("retry", {"enabled": False})
     if not isinstance(retry, dict):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid node retry policy")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid node retry policy")
     if retry.get("enabled", False):
         max_retries = retry.get("max_retries", 3)
         interval_seconds = retry.get("interval_seconds", 0)
         if not isinstance(max_retries, int) or not 1 <= max_retries <= 10:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Node retries must be between 1 and 10")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Node retries must be between 1 and 10")
         if not isinstance(interval_seconds, (int, float)) or not 0 <= interval_seconds <= 30:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Node retry interval must be between 0 and 30 seconds")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Node retry interval must be between 0 and 30 seconds")
     strategy = config.get("error_strategy", "fail")
     if strategy not in {"fail", "default_value", "error_branch"}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid node error strategy")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid node error strategy")
     if strategy == "default_value" and not isinstance(config.get("default_output", {}), dict):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Default node output must be an object")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Default node output must be an object")
 
 
 def validate_run_inputs(graph: dict[str, Any], inputs: dict[str, Any]) -> None:
@@ -796,27 +745,27 @@ def validate_run_inputs(graph: dict[str, Any], inputs: dict[str, Any]) -> None:
         name = field["name"]
         value = inputs.get(name)
         if field.get("required") and (value is None or value == "" or value == []):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Input '{name}' is required")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Input '{name}' is required")
         if value is None:
             continue
         field_type = field.get("type", "text")
         if field_type == "number" and not isinstance(value, (int, float)):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Input '{name}' must be a number")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Input '{name}' must be a number")
         if field_type in {"text", "textarea", "select"} and not isinstance(value, str):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Input '{name}' must be text")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Input '{name}' must be text")
         if field_type == "select" and value not in field.get("options", []):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Input '{name}' is not an allowed option")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Input '{name}' is not an allowed option")
         if field.get("max_length") and isinstance(value, str) and len(value) > field["max_length"]:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Input '{name}' is too long")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Input '{name}' is too long")
         if field_type == "number":
             if field.get("min") is not None and value < field["min"]:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Input '{name}' is below the minimum")
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Input '{name}' is below the minimum")
             if field.get("max") is not None and value > field["max"]:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Input '{name}' is above the maximum")
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Input '{name}' is above the maximum")
         if field_type == "file" and not isinstance(value, dict):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Input '{name}' must be a file")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Input '{name}' must be a file")
         if field_type == "files" and not isinstance(value, list):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Input '{name}' must be a file list")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Input '{name}' must be a file list")
 
 
 def resolve_value(value: Any, context: dict[str, Any]) -> Any:
@@ -854,7 +803,6 @@ TRACE_INPUT_KEYS: dict[str, tuple[str, ...]] = {
     "aggregate": ("variables", "groups"),
     "extract": ("source", "fields", "instruction"),
     "list": ("source", "filter", "nth", "limit", "sort", "unique"),
-    "knowledge": ("dataset_id", "dataset_ids", "query", "retrieval_mode", "top_k", "threshold", "metadata_filter"),
     "http": ("method", "url", "query", "headers", "body_type", "body"),
     "condition": ("logical_operator", "conditions", "expression"),
     "human": ("form_content", "submission_methods", "actions"),
@@ -937,6 +885,7 @@ def build_node_trace_metadata(
 def execute_parallel_graph(
     graph: dict[str, Any], inputs: dict[str, Any], environment: dict[str, Any] | None = None,
     system: dict[str, Any] | None = None,
+    model_providers: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     nodes = {
         node["id"]: node
@@ -952,7 +901,10 @@ def execute_parallel_graph(
     ready = deque(node_id for node_id in nodes if incoming[node_id] == 0)
     reachable = {node_id for node_id, node in nodes.items() if node.get("type") == "start"}
     context: dict[str, Any] = {
-        "inputs": deepcopy(inputs), "env": deepcopy(environment or {}), "sys": deepcopy(system or {})
+        "inputs": deepcopy(inputs),
+        "env": deepcopy(environment or {}),
+        "sys": deepcopy(system or {}),
+        "__model_providers__": model_providers or {},
     }
     trace: list[dict[str, Any]] = []
     running: dict[Future[Any], str] = {}
@@ -1039,18 +991,25 @@ def execute_parallel_graph(
                 node_id = running.pop(future)
                 complete_node(node_id, future.result())
     if visited != len(nodes):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Graph contains an unsupported cycle")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Graph contains an unsupported cycle")
     end_nodes = [node for node in nodes.values() if node.get("type") == "end"]
     executed_end = next((node for node in reversed(end_nodes) if node["id"] in context), None)
     return context.get(executed_end["id"], {}) if executed_end else {}, trace
+
+
+def checkpoint_context(context: dict[str, Any]) -> dict[str, Any]:
+    checkpoint = deepcopy(context)
+    checkpoint.pop("__model_providers__", None)
+    return checkpoint
 
 
 def execute_graph(
     graph: dict[str, Any], inputs: dict[str, Any], resume_state: dict[str, Any] | None = None,
     environment: dict[str, Any] | None = None,
     system: dict[str, Any] | None = None,
+    model_providers: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Execute deterministic built-in nodes. Remote/AI/script nodes are dispatched by workers later."""
+    """Execute a validated workflow graph with runtime-only provider credentials."""
     validate_graph(graph)
     validate_run_inputs(graph, inputs)
     pause_capable = any(
@@ -1058,7 +1017,13 @@ def execute_graph(
         for node in graph.get("nodes", [])
     )
     if not resume_state and not pause_capable:
-        return execute_parallel_graph(graph, inputs, environment=environment, system=system)
+        return execute_parallel_graph(
+            graph,
+            inputs,
+            environment=environment,
+            system=system,
+            model_providers=model_providers,
+        )
     nodes = {
         node["id"]: node
         for node in graph["nodes"]
@@ -1078,9 +1043,15 @@ def execute_graph(
         reachable = set(str(node_id) for node_id in resume_state.get("reachable", []))
         trace = deepcopy(resume_state.get("trace", []))
         visited = int(resume_state.get("visited", 0))
+        context["__model_providers__"] = model_providers or {}
     else:
         queue = deque(node_id for node_id in nodes if incoming[node_id] == 0)
-        context: dict[str, Any] = {"inputs": deepcopy(inputs), "env": deepcopy(environment or {}), "sys": deepcopy(system or {})}
+        context: dict[str, Any] = {
+            "inputs": deepcopy(inputs),
+            "env": deepcopy(environment or {}),
+            "sys": deepcopy(system or {}),
+            "__model_providers__": model_providers or {},
+        }
         reachable = {node_id for node_id, node in nodes.items() if node.get("type") == "start"}
         trace: list[dict[str, Any]] = []
         visited = 0
@@ -1110,7 +1081,7 @@ def execute_graph(
                     {
                         "queue": [node_id, *queue],
                         "incoming": dict(incoming),
-                        "context": context,
+                        "context": checkpoint_context(context),
                         "reachable": list(reachable),
                         "trace": trace,
                         "visited": visited,
@@ -1133,7 +1104,7 @@ def execute_graph(
                     {
                         "queue": [node_id, *queue],
                         "incoming": dict(incoming),
-                        "context": context,
+                        "context": checkpoint_context(context),
                         "reachable": list(reachable),
                         "trace": trace,
                         "visited": visited,
@@ -1191,7 +1162,7 @@ def execute_graph(
                 queue.append(target)
     if visited != len(nodes):
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "Graph contains an unsupported cycle"
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "Graph contains an unsupported cycle"
         )
     end_nodes = [node for node in nodes.values() if node.get("type") == "end"]
     executed_end = next((node for node in reversed(end_nodes) if node["id"] in context), None)
@@ -1208,7 +1179,7 @@ def execute_container_body(
         if node.get("parentNode") == container_id
     }
     if not children:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Container body is empty")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Container body is empty")
     incoming = defaultdict(int)
     outgoing: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for edge in graph.get("edges", []):
@@ -1247,7 +1218,7 @@ def execute_container_body(
             if incoming[target] == 0:
                 queue.append(target)
     if visited != len(children):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Container body contains an unsupported cycle")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Container body contains an unsupported cycle")
     output_selector = container.get("data", {}).get("config", {}).get("output")
     return (resolve_value(output_selector, context) if output_selector not in (None, "") else last_output), context
 
@@ -1256,11 +1227,10 @@ def execute_container_node(
     graph: dict[str, Any], node: dict[str, Any], context: dict[str, Any]
 ) -> dict[str, Any]:
     raw_config = node.get("data", {}).get("config", {})
-    node_id = str(node["id"])
     if node.get("type") == "iteration":
         source = resolve_value(raw_config.get("source"), context)
         if not isinstance(source, list):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Iteration source must resolve to an array")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Iteration source must resolve to an array")
         item_variable = str(raw_config.get("item_variable", "item"))
         def run_item(index_item: tuple[int, Any]) -> Any:
             index, item = index_item
@@ -1345,7 +1315,7 @@ def render_jinja_template(config: dict[str, Any], context: dict[str, Any]) -> st
     try:
         return environment.from_string(config.get("template", "")).render(**context, **bindings)
     except TemplateError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Template rendering failed: {exc}") from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Template rendering failed: {exc}") from exc
 
 
 def first_non_null(values: list[Any]) -> Any:
@@ -1366,7 +1336,7 @@ def coerce_assignment_value(value: Any, value_type: str) -> Any:
             number = float(value)
             return int(number) if number.is_integer() else number
         except (TypeError, ValueError) as exc:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Variable value is not a number") from exc
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Variable value is not a number") from exc
     if value_type == "Boolean":
         if isinstance(value, bool):
             return value
@@ -1375,12 +1345,12 @@ def coerce_assignment_value(value: Any, value_type: str) -> Any:
             return True
         if normalized in {"false", "0", "no", "off", ""}:
             return False
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Variable value is not a boolean")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Variable value is not a boolean")
     if value_type in {"Object", "Array"}:
         parsed = json.loads(value) if isinstance(value, str) else value
         expected = dict if value_type == "Object" else list
         if not isinstance(parsed, expected):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Variable value is not an {value_type.lower()}")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Variable value is not an {value_type.lower()}")
         return parsed
     return value
 
@@ -1498,7 +1468,7 @@ def execute_node(node: dict[str, Any], context: dict[str, Any]) -> Any:
     if node_type == "list":
         source = config.get("source", [])
         if not isinstance(source, list):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "List node source must be an array")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "List node source must be an array")
         operation = config.get("operation", "filter")
         if any(key in config for key in ("filter", "nth", "limit", "sort", "unique")):
             items = list(source)
@@ -1527,7 +1497,13 @@ def execute_node(node: dict[str, Any], context: dict[str, Any]) -> Any:
         if operation == "slice":
             return {"items": source[int(config.get("start", 0)) : int(config.get("end", len(source)))], "item": None}
         return {"items": source, "item": None}
+    if node_type == "llm":
+        return execute_llm(require_model_runtime(config, context), config)
+    if node_type == "agent":
+        return execute_agent(require_model_runtime(config, context), config)
     if node_type == "extract":
+        if config.get("provider_id"):
+            return execute_extractor(require_model_runtime(config, context), config)
         return extract_structured_parameters(config)
     if node_type == "condition":
         return evaluate_condition(config)
@@ -1539,13 +1515,13 @@ def execute_node(node: dict[str, Any], context: dict[str, Any]) -> Any:
         child_graph = raw_config.get("_resolved_graph")
         if not isinstance(child_graph, dict):
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "Sub-workflow reference has not been resolved",
             )
         child_inputs = resolve_value(raw_config.get("inputs", {}), context)
         if not isinstance(child_inputs, dict):
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "Sub-workflow inputs must resolve to an object",
             )
         node_id = str(node.get("id"))
@@ -1557,7 +1533,13 @@ def execute_node(node: dict[str, Any], context: dict[str, Any]) -> Any:
             )
         child_system = deepcopy(context.get("sys", {}))
         child_system["workflow_id"] = str(raw_config.get("workflow_id") or child_system.get("workflow_id", ""))
-        outputs, child_trace = execute_graph(child_graph, child_inputs, resume_state=child_resume, system=child_system)
+        outputs, child_trace = execute_graph(
+            child_graph,
+            child_inputs,
+            resume_state=child_resume,
+            system=child_system,
+            model_providers=context.get("__model_providers__", {}),
+        )
         context.get("__subworkflow_resume__", {}).pop(node_id, None)
         return {**outputs, "outputs": outputs, "_trace": child_trace}
     if node_type == "human":
@@ -1570,7 +1552,7 @@ def execute_node(node: dict[str, Any], context: dict[str, Any]) -> Any:
             None,
         )
         if not action:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Unknown human action")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Unknown human action")
         return {
             "action_id": action_id,
             "action_value": action.get("value", action_id),
@@ -1584,6 +1566,21 @@ def execute_node(node: dict[str, Any], context: dict[str, Any]) -> Any:
         "message": f"Node type '{node_type}' requires an asynchronous worker",
         "config": config,
     }
+
+
+def require_model_runtime(
+    config: dict[str, Any], context: dict[str, Any]
+) -> dict[str, Any]:
+    provider_id = str(config.get("provider_id", "")).strip()
+    if not provider_id:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Model provider is required")
+    runtime = context.get("__model_providers__", {}).get(provider_id)
+    if not runtime:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Model provider is missing or belongs to another workspace",
+        )
+    return runtime
 
 
 def execute_code_node(config: dict[str, Any]) -> dict[str, Any]:
@@ -1611,10 +1608,10 @@ def execute_code_node(config: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"Sandbox unavailable: {exc}") from exc
     if result.get("status") != "succeeded":
         error = str(result.get("error") or "Python execution failed")
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, error[-4000:])
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, error[-4000:])
     sandbox_outputs = result.get("outputs")
     if not isinstance(sandbox_outputs, dict):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Python entrypoint must return an object")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Python entrypoint must return an object")
     output: dict[str, Any] = {}
     for declared in config.get("outputs", []):
         name = str(declared["name"])
@@ -1808,10 +1805,22 @@ def parse_condition_literal(value: str) -> Any:
         return stripped.strip("'\"")
 
 
-def execute_node_preview(node: dict[str, Any], inputs: dict[str, Any], environment: dict[str, Any] | None = None, system: dict[str, Any] | None = None) -> tuple[Any, dict[str, Any]]:
+def execute_node_preview(
+    node: dict[str, Any],
+    inputs: dict[str, Any],
+    environment: dict[str, Any] | None = None,
+    system: dict[str, Any] | None = None,
+    model_providers: dict[str, dict[str, Any]] | None = None,
+) -> tuple[Any, dict[str, Any]]:
     started = datetime.now(UTC)
     output, execution_status, execution_error, execution_attempts = execute_node_with_policy(
-        node, {"inputs": deepcopy(inputs), "env": deepcopy(environment or {}), "sys": deepcopy(system or {})}
+        node,
+        {
+            "inputs": deepcopy(inputs),
+            "env": deepcopy(environment or {}),
+            "sys": deepcopy(system or {}),
+            "__model_providers__": model_providers or {},
+        },
     )
     trace = {
         "node_id": node.get("id"),
@@ -1841,7 +1850,7 @@ def resolve_script_references(
                 script_id = tool.get("reference_id")
                 if not script_id or script_id not in latest_versions:
                     raise HTTPException(
-                        status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status.HTTP_422_UNPROCESSABLE_CONTENT,
                         f"Agent tool {tool.get('name') or tool.get('id')} is invalid",
                     )
                 version_id, version = latest_versions[script_id]
@@ -1858,13 +1867,13 @@ def resolve_script_references(
         script_id = config.get("script_id")
         if not script_id or script_id not in latest_versions:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, f"Script node {node['id']} is invalid"
+                status.HTTP_422_UNPROCESSABLE_CONTENT, f"Script node {node['id']} is invalid"
             )
         version_id, version = latest_versions[script_id]
         requested = config.get("version")
         if requested not in (None, "latest", version):
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, "Requested script version not found"
+                status.HTTP_422_UNPROCESSABLE_CONTENT, "Requested script version not found"
             )
         resolved[node["id"]] = {
             "script_id": script_id,

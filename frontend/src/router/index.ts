@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import AdminUsersPage from '@/pages/AdminUsersPage.vue'; import KnowledgePage from '@/pages/KnowledgePage.vue'; import LoginPage from '@/pages/LoginPage.vue'; import MembersPage from '@/pages/MembersPage.vue'; import ModelsPage from '@/pages/ModelsPage.vue'; import NewWorkspacePage from '@/pages/NewWorkspacePage.vue'; import PublicAppPage from '@/pages/PublicAppPage.vue'; import ScriptsPage from '@/pages/ScriptsPage.vue'; import SettingsPage from '@/pages/SettingsPage.vue'; import StudioPage from '@/pages/StudioPage.vue'; import WorkflowDesignerPage from '@/pages/WorkflowDesignerPage.vue'
+import AdminUsersPage from '@/pages/AdminUsersPage.vue'; import LoginPage from '@/pages/LoginPage.vue'; import MembersPage from '@/pages/MembersPage.vue'; import ModelsPage from '@/pages/ModelsPage.vue'; import NewWorkspacePage from '@/pages/NewWorkspacePage.vue'; import PublicAppPage from '@/pages/PublicAppPage.vue'; import ScriptsPage from '@/pages/ScriptsPage.vue'; import SettingsPage from '@/pages/SettingsPage.vue'; import StudioPage from '@/pages/StudioPage.vue'; import WorkflowDesignerPage from '@/pages/WorkflowDesignerPage.vue'
 
 const router = createRouter({ history: createWebHistory(), routes: [
   { path: '/login', component: LoginPage, meta: { public: true } },
@@ -11,7 +11,7 @@ const router = createRouter({ history: createWebHistory(), routes: [
   { path: '/w/:workspaceId/scripts', component: ScriptsPage },
   { path: '/w/:workspaceId/workflows/:workflowId', component: WorkflowDesignerPage },
   { path: '/w/:workspaceId/members', component: MembersPage },
-  { path: '/w/:workspaceId/knowledge', component: KnowledgePage },
+  { path: '/w/:workspaceId/knowledge', redirect: to => `/w/${String(to.params.workspaceId)}/studio` },
   { path: '/w/:workspaceId/models', component: ModelsPage },
   { path: '/w/:workspaceId/settings', component: SettingsPage },
   { path: '/', redirect: () => {
