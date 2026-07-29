@@ -7,9 +7,9 @@ from pathlib import Path
 from time import sleep as sleep_for_test
 from unittest.mock import AsyncMock
 
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test-openworkflow.db"
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test-weaverun.db"
 os.environ["TASK_ALWAYS_EAGER"] = "true"
-Path("test-openworkflow.db").unlink(missing_ok=True)
+Path("test-weaverun.db").unlink(missing_ok=True)
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402
@@ -96,7 +96,7 @@ def schema():
     gc.collect()
     for _ in range(20):
         try:
-            Path("test-openworkflow.db").unlink(missing_ok=True)
+            Path("test-weaverun.db").unlink(missing_ok=True)
             break
         except PermissionError:
             sleep_for_test(0.05)
@@ -707,6 +707,36 @@ def test_start_node_uses_one_trigger_and_validates_inputs(client: TestClient):
     )
     assert invalid_options.status_code == 422
 
+    form_graph = deepcopy(graph)
+    form_start = next(node for node in form_graph["nodes"] if node["type"] == "start")
+    form_start["data"]["config"]["triggers"] = ["form"]
+    form_saved = client.put(
+        f"/api/v1/workspaces/{workspace_id}/workflows/{workflow['id']}",
+        headers=headers,
+        json={"graph": form_graph, "expected_version": saved.json()["draft_version"]},
+    )
+    assert form_saved.status_code == 200, form_saved.text
+    form_published = client.post(
+        f"/api/v1/workspaces/{workspace_id}/workflows/{workflow['id']}/publish",
+        headers=headers,
+        json={"change_note": "Enable form trigger"},
+    )
+    assert form_published.status_code == 200, form_published.text
+    assert client.post(
+        f"/v1/apps/{workflow['slug']}/run",
+        json={"inputs": {"message": "From form"}},
+    ).status_code == 404
+    form_run = client.post(
+        f"/v1/apps/{workflow['slug']}/form",
+        json={"inputs": {"message": "From form"}},
+    )
+    assert form_run.status_code == 200, form_run.text
+    runs = client.get(
+        f"/api/v1/workspaces/{workspace_id}/workflows/{workflow['id']}/runs",
+        headers=headers,
+    ).json()["items"]
+    assert any(run["triggered_by"] == "form" for run in runs)
+
 
 def test_draft_node_preview_records_single_node_trace(client: TestClient):
     session = client.post(
@@ -993,7 +1023,7 @@ def test_http_node_validates_and_executes_a_structured_request():
         assert request.url == "https://example.test/items?page=2"
         assert request.headers["authorization"] == "Bearer secret-token"
         assert request.headers["x-workflow"] == "test"
-        assert request.read() == b'{"name":"Open Workflow"}'
+        assert request.read() == b'{"name":"WeaveRun"}'
         return httpx.Response(201, json={"id": 42}, headers={"X-Result": "created"})
 
     output = execute_http_request(
@@ -1004,7 +1034,7 @@ def test_http_node_validates_and_executes_a_structured_request():
             "headers": {"X-Workflow": "test"},
             "auth": {"type": "bearer", "token": "secret-token"},
             "body_type": "json",
-            "body": {"name": "Open Workflow"},
+            "body": {"name": "WeaveRun"},
             "timeout_seconds": 10,
             "max_response_bytes": 4096,
         },

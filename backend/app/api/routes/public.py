@@ -125,6 +125,18 @@ async def run_published(
     return await execute_published(app_slug, payload, db, authorization, "api")
 
 
+@router.post("/{app_slug}/form")
+async def run_published_form(
+    app_slug: str,
+    payload: RunIn,
+    db: DbSession,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    _, version = await get_published(db, app_slug)
+    ensure_trigger(version, "form")
+    return await execute_published(app_slug, payload, db, authorization, "form")
+
+
 @router.post("/{app_slug}/webhook")
 async def webhook_published(
     app_slug: str,

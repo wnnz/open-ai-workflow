@@ -10,7 +10,7 @@ from pypdf import PdfReader, PdfWriter
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen.canvas import Canvas
 
-app = FastAPI(title="Open Workflow Document Worker", docs_url=None)
+app = FastAPI(title="WeaveRun Document Worker", docs_url=None)
 
 
 class PdfCreateRequest(BaseModel):

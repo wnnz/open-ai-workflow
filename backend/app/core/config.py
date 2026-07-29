@@ -10,12 +10,12 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_secret_key: str = "development-only-secret-change-me"
     credential_encryption_key: str | None = None
-    database_url: str = "sqlite+aiosqlite:///./openworkflow.db"
+    database_url: str = "sqlite+aiosqlite:///./weaverun.db"
     redis_url: str = "redis://localhost:6379/0"
     minio_endpoint: str = "localhost:9000"
     minio_access_key: str = ""
     minio_secret_key: str = ""
-    minio_bucket: str = "openworkflow"
+    minio_bucket: str = "weaverun"
     minio_secure: bool = False
     access_token_minutes: int = 720
     cors_origins: str = "http://localhost:5173"

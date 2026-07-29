@@ -6,13 +6,17 @@ const props = withDefaults(defineProps<{
   origin: string
   slug?: string
   triggers?: string[]
+  inputFields?: Array<{ type?: string }>
 }>(), {
   slug: '',
   triggers: () => [],
+  inputFields: () => [],
 })
 
 const { t } = useI18n()
 const appBaseUrl = computed(() => `${props.origin}/v1/apps/${props.slug}`)
+const hasFileInput = computed(() => props.inputFields.some(field => ['file', 'files'].includes(field.type || '')))
+const hasPublicEndpoint = computed(() => props.triggers.some(trigger => ['form', 'api', 'webhook'].includes(trigger)))
 </script>
 
 <template>
@@ -26,12 +30,21 @@ const appBaseUrl = computed(() => `${props.origin}/v1/apps/${props.slug}`)
           <code v-if="triggers.includes('form')" class="block rounded-md bg-slate-950 p-3 text-xs text-slate-100">GET {{ origin }}/apps/{{ slug }}</code>
           <code v-if="triggers.includes('api')" class="block rounded-md bg-slate-950 p-3 text-xs text-slate-100">POST {{ appBaseUrl }}/run</code>
           <code v-if="triggers.includes('webhook')" class="block rounded-md bg-slate-950 p-3 text-xs text-slate-100">POST {{ appBaseUrl }}/webhook</code>
-          <code class="block rounded-md bg-slate-950 p-3 text-xs text-slate-100">POST {{ appBaseUrl }}/files</code>
+          <code v-if="hasPublicEndpoint && hasFileInput" class="block rounded-md bg-slate-950 p-3 text-xs text-slate-100">POST {{ appBaseUrl }}/files</code>
+          <p v-if="!hasPublicEndpoint" class="muted py-3 text-sm">{{ t('designer.noPublicEndpoint') }}</p>
         </div>
-        <div class="mt-5 text-xs font-semibold">cURL</div>
-        <pre class="mt-2 overflow-auto rounded-md bg-slate-950 p-4 text-xs text-slate-100">curl -X POST '{{ appBaseUrl }}/run' \
+        <template v-if="triggers.includes('api')">
+          <div class="mt-5 text-xs font-semibold">cURL</div>
+          <pre class="mt-2 overflow-auto rounded-md bg-slate-950 p-4 text-xs text-slate-100">curl -X POST '{{ appBaseUrl }}/run' \
   -H 'Content-Type: application/json' \
   -d '{"inputs":{"message":"Hello"}}'</pre>
+        </template>
+        <template v-else-if="triggers.includes('webhook')">
+          <div class="mt-5 text-xs font-semibold">cURL</div>
+          <pre class="mt-2 overflow-auto rounded-md bg-slate-950 p-4 text-xs text-slate-100">curl -X POST '{{ appBaseUrl }}/webhook' \
+  -H 'Content-Type: application/json' \
+  -d '{"inputs":{"message":"Hello"}}'</pre>
+        </template>
       </div>
     </div>
   </section>

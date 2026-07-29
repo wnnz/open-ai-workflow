@@ -1255,8 +1255,8 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
                 <div class="mt-5 flex items-center justify-between"><div><h3 class="text-xs font-semibold">{{ t('designer.userInputs') }}</h3><p class="muted mt-1 text-[11px]">{{ t('designer.userInputsHint') }}</p></div><button class="icon-button" :title="t('designer.addInputField')" :aria-label="t('designer.addInputField')" @click="addStartInput"><Plus :size="14" /></button></div>
                 <div class="mt-3 space-y-2">
                   <div v-for="(field, index) in selected.data.config.input_fields" :key="index" class="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)]">
-                    <div class="flex items-center gap-1 p-2">
-                      <button type="button" class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-[var(--panel)]" @click="toggleStartField(index)">
+                    <div class="flex items-center gap-1 p-2 transition-colors hover:bg-[var(--primary-soft)]">
+                      <button type="button" class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left" @click="toggleStartField(index)">
                         <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--primary-soft)] text-[10px] font-semibold text-[var(--primary)]">{{ field.type === 'files' ? '[]' : field.type === 'file' ? 'F' : field.type === 'number' ? '#' : field.type === 'select' ? '⌄' : 'T' }}</span>
                         <span class="min-w-0 flex-1"><span class="block truncate font-mono text-xs font-semibold">{{ field.name || t('designer.unnamedField') }}</span><span class="muted mt-0.5 block truncate text-[10px]">{{ field.label || t('designer.fieldLabel') }} · {{ t(`designer.fieldTypes.${field.type}`) }}</span></span>
                         <span v-if="field.required" class="rounded bg-red-50 px-1.5 py-0.5 text-[9px] text-red-600 dark:bg-red-950/30">{{ t('designer.required') }}</span>
@@ -1329,7 +1329,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
           </template>
         </WorkflowNodeInspector>
       </div>
-      <WorkflowApiPanel v-else-if="activeSection === 'api'" :origin="origin" :slug="workflow?.slug" :triggers="startNode?.data?.config?.triggers" />
+      <WorkflowApiPanel v-else-if="activeSection === 'api'" :origin="origin" :slug="workflow?.slug" :triggers="startNode?.data?.config?.triggers" :input-fields="startFields" />
       <WorkflowRunLogsPanel v-else-if="activeSection === 'logs'" :runs="runs" @refresh="loadRuns" />
       <WorkflowMonitoringPanel v-else :runs="runs" />
     </div>

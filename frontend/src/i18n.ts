@@ -187,7 +187,7 @@ export const messages = {
       multiSelection: "多节点操作",
       selectedCount: "已选择 {count} 个节点",
       clearSelection: "取消选择",
-      apiAccess: "访问 API",
+      apiAccess: "发布与接入",
       logs: "日志",
       monitoring: "监控",
       autoSave: "自动保存已开启",
@@ -448,9 +448,9 @@ export const messages = {
       help: "设计器帮助",
       helpText:
         "从左上角添加节点，拖动节点端口建立连接。选择节点后可在右侧修改名称、说明、输入字段和配置。保存采用乐观并发控制，发布后生成不可变版本。",
-      apiTitle: "应用 API",
+      apiTitle: "发布与接入",
       apiHint:
-        "发布后可通过以下公共接口调用应用，受保护应用还需要 Bearer API Key。",
+        "这里仅展示当前开始节点触发方式可用的访问入口。受保护应用还需要 Bearer API Key。",
       runLogs: "运行日志",
       logsHint: "查看最近 100 次草稿试运行记录。",
       monitorHint: "汇总当前工作流最近的执行状态。",
@@ -488,6 +488,7 @@ export const messages = {
       chooseFile: "选择并上传文件",
       triggerSource: "触发来源",
       endpoints: "发布端点",
+      noPublicEndpoint: "当前触发方式不提供公共访问端点。",
       paletteTabs: { nodes: "节点", tools: "工具", snippets: "脚本片段" },
       searchNodes: "搜索节点",
       searchSnippets: "搜索脚本片段",
@@ -970,6 +971,9 @@ export const messages = {
     publicApp: {
       chooseFile: "点击选择文件",
       run: "运行应用",
+      running: "正在运行，请稍候…",
+      waiting: "运行正在等待处理。",
+      runFailed: "应用运行失败",
       formDisabled: "此应用未启用用户表单访问。",
     },
     roles: {
@@ -1171,7 +1175,7 @@ export const messages = {
       multiSelection: "Multiple node actions",
       selectedCount: "{count} nodes selected",
       clearSelection: "Clear selection",
-      apiAccess: "API access",
+      apiAccess: "Publish & access",
       logs: "Logs",
       monitoring: "Monitoring",
       autoSave: "Auto-save enabled",
@@ -1432,9 +1436,9 @@ export const messages = {
       help: "Designer help",
       helpText:
         "Add nodes from the upper-left control and connect their ports. Select a node to edit its name, description, inputs, and configuration. Saves use optimistic concurrency and publishing creates an immutable version.",
-      apiTitle: "Application API",
+      apiTitle: "Publish & access",
       apiHint:
-        "After publishing, call the application through the public endpoint below. Protected applications also require a Bearer API key.",
+        "Only access points enabled by the current start trigger are shown. Protected applications also require a Bearer API key.",
       runLogs: "Run logs",
       logsHint: "View the latest 100 draft test runs.",
       monitorHint: "Summary of recent execution status for this workflow.",
@@ -1472,6 +1476,7 @@ export const messages = {
       chooseFile: "Choose and upload files",
       triggerSource: "Trigger source",
       endpoints: "Published endpoints",
+      noPublicEndpoint: "The current trigger does not provide a public access endpoint.",
       paletteTabs: { nodes: "Nodes", tools: "Tools", snippets: "Snippets" },
       searchNodes: "Search nodes",
       searchSnippets: "Search snippets",
@@ -1960,6 +1965,9 @@ export const messages = {
     publicApp: {
       chooseFile: "Click to choose files",
       run: "Run application",
+      running: "Running, please wait…",
+      waiting: "The run is waiting for action.",
+      runFailed: "Application run failed",
       formDisabled:
         "This application does not have the user form trigger enabled.",
     },

@@ -17,7 +17,7 @@ from app.observability import install_observability
 
 settings = get_settings()
 app = FastAPI(
-    title="Open AI Workflow API",
+    title="WeaveRun API",
     version="0.1.0",
     description="Multi-workspace AI workflow and script management platform",
 )

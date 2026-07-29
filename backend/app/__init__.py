@@ -1,1 +1,1 @@
-"""Open AI Workflow backend."""
+"""WeaveRun backend."""

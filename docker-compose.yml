@@ -1,4 +1,4 @@
-name: open-ai-workflow
+name: weaverun
 
 x-build-proxy: &build-proxy
   HTTP_PROXY: ${CONTAINER_HTTP_PROXY:-http://host.docker.internal:10808}
@@ -6,7 +6,7 @@ x-build-proxy: &build-proxy
   NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,postgres,redis,minio,api,worker,sandbox,sandbox-docker-proxy,document-worker}
 
 x-backend: &backend
-  image: open-ai-workflow-api
+  image: weaverun-api
   build:
     context: ./backend
     args: *build-proxy
@@ -27,14 +27,14 @@ services:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
-      POSTGRES_USER: openworkflow
-      POSTGRES_PASSWORD: openworkflow
-      POSTGRES_DB: openworkflow
+      POSTGRES_USER: weaverun
+      POSTGRES_PASSWORD: weaverun
+      POSTGRES_DB: weaverun
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U openworkflow"]
+      test: ["CMD-SHELL", "pg_isready -U weaverun"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -92,14 +92,14 @@ services:
     command: celery -A app.worker.celery beat --loglevel=INFO
 
   sandbox:
-    image: open-ai-workflow-sandbox
+    image: weaverun-sandbox
     build:
       context: ./sandbox
       args: *build-proxy
     restart: unless-stopped
     environment:
       SANDBOX_SHARED_SECRET: ${SANDBOX_SHARED_SECRET:?SANDBOX_SHARED_SECRET must be set}
-      SANDBOX_RUNTIME_IMAGE: open-ai-workflow-sandbox
+      SANDBOX_RUNTIME_IMAGE: weaverun-sandbox
       DOCKER_HOST: tcp://sandbox-docker-proxy:2375
     networks:
       - sandbox-runtime
@@ -153,9 +153,13 @@ services:
 
 volumes:
   postgres-data:
+    name: weaverun_postgres-data
   redis-data:
+    name: weaverun_redis-data
   minio-data:
+    name: weaverun_minio-data
   sandbox-proxy-config:
+    name: weaverun_sandbox-proxy-config
 
 networks:
   sandbox-runtime:

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Play } from 'lucide-vue-next'
 import { useRoute } from 'vue-router'
@@ -22,12 +22,70 @@ const loading = ref(false)
 const result = ref<any>(null)
 const error = ref('')
 const slug = String(route.params.slug)
+const runStorageKey = `weaverun:public-run:${slug}`
+const terminalStatuses = new Set(['succeeded', 'failed', 'waiting'])
+let activeRunId = ''
 const headers = (): Record<string, string> => apiKey.value ? { Authorization: `Bearer ${apiKey.value}` } : {}
+const running = computed(() => Boolean(result.value && !terminalStatuses.has(result.value.status)))
+
+function delay(milliseconds: number) {
+  return new Promise(resolve => window.setTimeout(resolve, milliseconds))
+}
+
+async function getRun(runId: string) {
+  return (await axios.get(`/v1/apps/${slug}/runs/${runId}`, { headers: headers() })).data
+}
+
+async function followRun(runId: string) {
+  try {
+    let streamedText = ''
+    await consumeRunEvents(`/v1/apps/${slug}/runs/${runId}/events`, event => {
+      if (activeRunId !== runId) return
+      if (event.type === 'token') {
+        streamedText += String(event.delta || '')
+        result.value = { ...result.value, status: 'running', outputs: { text: streamedText } }
+      } else if (event.status && ['run_started', 'run_finished'].includes(String(event.type))) {
+        result.value = { ...result.value, status: event.status }
+      }
+    }, headers())
+  } catch {
+    // A dropped event stream is recoverable; persisted run state remains authoritative.
+  }
+
+  while (activeRunId === runId) {
+    const current = await getRun(runId)
+    if (activeRunId !== runId) return
+    result.value = current
+    if (terminalStatuses.has(current.status)) {
+      if (current.status === 'failed') error.value = current.error || t('publicApp.runFailed')
+      return
+    }
+    await delay(1500)
+  }
+}
+
+async function restoreRun() {
+  if (app.value?.access !== 'public') return
+  const runId = sessionStorage.getItem(runStorageKey)
+  if (!runId) return
+  activeRunId = runId
+  loading.value = true
+  try {
+    result.value = await getRun(runId)
+    if (!terminalStatuses.has(result.value.status)) await followRun(runId)
+  } catch {
+    sessionStorage.removeItem(runStorageKey)
+    result.value = null
+  } finally {
+    if (activeRunId === runId) loading.value = false
+  }
+}
 
 async function load() {
   try {
     app.value = (await axios.get(`/v1/apps/${slug}`)).data
     values.value = createWorkflowInputValues(app.value.input_fields)
+    await restoreRun()
   } catch (cause: any) { error.value = cause.response?.data?.detail || String(cause) }
 }
 
@@ -49,20 +107,19 @@ async function upload(field: any, event: Event) {
 }
 
 async function run() {
+  if (loading.value) return
   loading.value = true; error.value = ''; result.value = null
+  let runId = ''
   try {
     const inputs = coerceWorkflowInputValues(app.value.input_fields, values.value)
-    result.value = (await axios.post(`/v1/apps/${slug}/run`, { inputs }, { headers: { ...headers(), 'Content-Type': 'application/json' } })).data
-    let streamedText = ''
-    await consumeRunEvents(`/v1/apps/${slug}/runs/${result.value.run_id}/events`, event => {
-      if (event.type === 'token') {
-        streamedText += String(event.delta || '')
-        result.value = { ...result.value, status: 'running', outputs: { text: streamedText } }
-      } else if (event.status && ['run_started', 'run_finished'].includes(String(event.type))) result.value = { ...result.value, status: event.status }
-    }, headers())
-    result.value = (await axios.get(`/v1/apps/${slug}/runs/${result.value.run_id}`, { headers: headers() })).data
+    const created = (await axios.post(`/v1/apps/${slug}/form`, { inputs }, { headers: { ...headers(), 'Content-Type': 'application/json' } })).data
+    runId = String(created.run_id)
+    activeRunId = runId
+    result.value = created
+    sessionStorage.setItem(runStorageKey, runId)
+    await followRun(runId)
   } catch (cause: any) { error.value = cause.response?.data?.detail || String(cause) }
-  finally { loading.value = false }
+  finally { if (!runId || activeRunId === runId) loading.value = false }
 }
 
 onMounted(load)
@@ -77,9 +134,10 @@ onMounted(load)
         <div class="space-y-5">
           <WorkflowInputField v-for="field in app.input_fields" :key="field.name" v-model="values[field.name]" :field="field" :uploading="loading" @file-change="upload(field, $event)" />
         </div>
-        <Button class="mt-6 w-full" type="submit" :loading="loading"><Play :size="16" />{{ t('publicApp.run') }}</Button>
-        <AlertBanner :message="error" tone="error" />
-        <WorkflowOutputRenderer v-if="result" class="mt-4" :output="result.outputs" />
+        <Button class="mt-6 w-full" type="submit" :loading="loading" :disabled="loading"><Play :size="16" />{{ t('publicApp.run') }}</Button>
+        <AlertBanner v-if="running" :message="t('publicApp.running')" tone="info" />
+        <AlertBanner v-else-if="result?.status === 'waiting'" :message="t('publicApp.waiting')" tone="info" />
+        <WorkflowOutputRenderer v-if="result?.status === 'succeeded'" class="mt-4" :output="result.outputs" />
       </form>
       <div v-else-if="app" class="surface rounded-xl p-8 text-center text-sm text-[var(--muted)]">{{ t('publicApp.formDisabled') }}</div>
       <AlertBanner :message="error" tone="error" />

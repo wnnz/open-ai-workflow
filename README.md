@@ -1,6 +1,6 @@
-# Open AI Workflow
+# WeaveRun
 
-Open AI Workflow is a self-hosted, multi-workspace AI workflow platform built with Python and Vue. It provides a visual workflow designer, versioned Python scripts, OpenAI-compatible models, queued execution, streaming run events, and application publishing.
+WeaveRun is a self-hosted, multi-workspace AI workflow platform built with Python and Vue. It provides a visual workflow designer, versioned Python scripts, OpenAI-compatible models, queued execution, streaming run events, and application publishing.
 
 ## Quick start
 

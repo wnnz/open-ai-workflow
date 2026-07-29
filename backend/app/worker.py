@@ -31,7 +31,7 @@ from app.services.workflow_environment import build_system_variables, load_workf
 
 logger = logging.getLogger(__name__)
 configure_logging()
-configure_otel("openworkflow-worker")
+configure_otel("weaverun-worker")
 
 
 async def _run_and_dispose(coroutine):
