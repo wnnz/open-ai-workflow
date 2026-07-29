@@ -415,9 +415,10 @@ def execute_image_generation(runtime: dict[str, Any], config: dict[str, Any]) ->
         "size": size,
         "quality": str(config.get("quality", "high")),
         "output_format": output_format,
-        "output_compression": compression,
         "background": str(config.get("background", "auto")),
     }
+    if output_format != "png":
+        payload["output_compression"] = compression
     image_runtime = {
         **runtime,
         "config": {

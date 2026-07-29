@@ -1861,6 +1861,35 @@ def test_image_node_generates_multiple_images_with_provider_credentials(monkeypa
     assert trace[1]["output"]["count"] == 2
 
 
+def test_png_image_generation_omits_unsupported_compression(monkeypatch: pytest.MonkeyPatch):
+    import app.services.model_execution as model_execution
+
+    calls: list[dict] = []
+
+    def request(runtime: dict, path: str, payload: dict) -> dict:
+        calls.append(payload)
+        return {"data": [{"b64_json": "iVBORw=="}]}
+
+    monkeypatch.setattr(model_execution, "provider_request", request)
+    output = model_execution.execute_image_generation(
+        {
+            "base_url": "https://example.com/v1",
+            "api_key": "runtime-secret",
+            "default_model": "gpt-image-2",
+            "config": {},
+        },
+        {
+            "prompt": "A clean product photo",
+            "size": "1024x1024",
+            "output_format": "png",
+            "output_compression": 80,
+        },
+    )
+
+    assert "output_compression" not in calls[0]
+    assert output["images"] == ["data:image/png;base64,iVBORw=="]
+
+
 def test_human_approval_pauses_and_resumes_the_selected_branch(client: TestClient):
     session = register(client, "approval-owner@example.com", "Approval Owner")
     headers = auth(session)

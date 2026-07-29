@@ -368,9 +368,7 @@ watch(() => workspaces.activeId, load)
 
     <ModalShell v-model="showForm" :title="editing ? t('models.edit') : t('models.add')" max-width="max-w-3xl" form @submit="save">
       <AlertBanner :message="formError" tone="error" />
-      <AlertBanner v-if="connectionResult" tone="success">
-        {{ connectionResult.warning || connectionResult.message }} · {{ connectionResult.latency_ms }} ms
-      </AlertBanner>
+      <AlertBanner v-if="connectionResult" :message="`${connectionResult.warning || connectionResult.message} · ${connectionResult.latency_ms} ms`" tone="success" />
       <div class="grid items-start gap-x-5 gap-y-4 sm:grid-cols-2">
         <FormField class="sm:col-span-2" :label="t('common.name')" required><InputText v-model="form.name" required /></FormField>
         <FormField label="Base URL" :error="form.base_url && !baseUrlValid ? t('models.invalidBaseUrl') : ''" required><InputText v-model="form.base_url" required placeholder="https://api.example.com/v1" /></FormField>

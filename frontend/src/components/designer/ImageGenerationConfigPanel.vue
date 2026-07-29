@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import VariableField from '@/components/VariableField.vue'
 import type { WorkflowVariableGroup } from '@/utils/workflowVariables'
 import InputText from '@/volt/InputText.vue'
@@ -13,12 +13,17 @@ const props = defineProps<{
 props.config.timeout_seconds ??= 600
 
 const selectedProvider = computed(() => props.providers.find(provider => provider.id === props.config.provider_id))
+const pngOutput = computed(() => props.config.output_format === 'png')
 const modelOptions = computed(() => {
   const provider = selectedProvider.value
   const models = Array.isArray(provider?.available_models) ? provider.available_models : []
   const imageModels = models.filter((model: string) => /image/i.test(model))
   return imageModels.length ? imageModels : models
 })
+
+watch(() => props.config.output_format, (format) => {
+  if (format === 'png') props.config.output_compression = 100
+}, { immediate: true })
 
 function selectProvider() {
   const provider = selectedProvider.value
@@ -63,7 +68,7 @@ function selectProvider() {
       <div class="grid grid-cols-2 gap-3 border-t border-[var(--border)] p-3">
         <label class="field-label">{{ $t('designer.imageQuality') }}<Select v-model="config.quality" class="mt-1.5 !h-9 !text-xs"><option v-for="value in ['auto','low','medium','high']" :key="value" :value="value">{{ value }}</option></Select></label>
         <label class="field-label">{{ $t('designer.imageFormat') }}<Select v-model="config.output_format" class="mt-1.5 !h-9 !text-xs"><option v-for="value in ['webp','png','jpeg']" :key="value" :value="value">{{ value }}</option></Select></label>
-        <label class="field-label">{{ $t('designer.imageCompression') }}<InputText v-model.number="config.output_compression" class="mt-1.5" type="number" min="0" max="100" /></label>
+        <label class="field-label">{{ $t('designer.imageCompression') }}<InputText v-model.number="config.output_compression" class="mt-1.5" type="number" min="0" max="100" :disabled="pngOutput" /></label>
         <label class="field-label">{{ $t('designer.imageBackground') }}<Select v-model="config.background" class="mt-1.5 !h-9 !text-xs"><option v-for="value in ['auto','opaque','transparent']" :key="value" :value="value">{{ value }}</option></Select></label>
         <label class="field-label col-span-2">{{ $t('designer.imageTimeout') }}<InputText v-model.number="config.timeout_seconds" class="mt-1.5" type="number" min="30" max="900" /></label>
       </div>

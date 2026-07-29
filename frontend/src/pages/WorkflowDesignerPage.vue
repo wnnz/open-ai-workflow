@@ -79,7 +79,7 @@ const route = useRoute(); const router = useRouter()
 const auth = useAuthStore(); const preferences = usePreferencesStore(); const workspaces = useWorkspacesStore()
 const { addNodes, addSelectedNodes, fitView, getNodes, onConnect, removeSelectedNodes, screenToFlowCoordinate, setCenter, viewport, zoomIn, zoomOut } = useVueFlow()
 const workflow = ref<any>(null); const nodes = ref<Node[]>([]); const edges = ref<Edge[]>([])
-const selected = ref<Node | null>(null); const saving = ref(false); const publishing = ref(false)
+const selected = ref<Node | null>(null); const saving = ref(false); const publishing = ref(false); const publishSuccess = ref('')
 const inspectorTab = ref<InspectorTab>('settings'); const paletteOpen = ref(false)
 const paletteSourceId = ref<string | null>(null)
 const paletteSourceHandle = ref<string | null>(null)
@@ -447,13 +447,14 @@ function handleBeforeUnload(event: BeforeUnloadEvent) {
 }
 async function publish(payload: any = { change_note: 'Published from designer', access: 'public' }) {
   if (validationIssues.value.length) { showChecklist.value = true; return }
-  publishing.value = true
+  publishing.value = true; publishSuccess.value = ''
   try {
     if (!await save()) return
     const { data } = await api.post(`/workspaces/${workspaceId.value}/workflows/${workflowId.value}/publish`, payload)
     workflow.value.published_version_id = data.id
     workflow.value.published_access = payload.access
     await loadVersions()
+    publishSuccess.value = t('designer.publishSucceeded')
   } catch (cause: any) { saveError.value = cause.response?.data?.detail || String(cause) }
   finally { publishing.value = false }
 }
@@ -1326,7 +1327,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
           </template>
         </WorkflowNodeInspector>
       </div>
-      <div v-else-if="activeSection === 'api'" class="h-full overflow-y-auto bg-[var(--app-bg)] p-6"><div class="mx-auto max-w-5xl"><PublishPopover :open="true" :workflow="workflow" :versions="versions" :publishing="publishing" @publish="publish" @history="openVersionHistoryFromPublish" @api="openApiFromPublish" @run="openPublishedApp" /></div></div>
+      <div v-else-if="activeSection === 'api'" class="h-full overflow-y-auto bg-[var(--app-bg)] p-6"><div class="mx-auto max-w-5xl"><AlertBanner class="mb-4 !mt-0" :message="publishSuccess" tone="success" /><PublishPopover :open="true" :workflow="workflow" :versions="versions" :publishing="publishing" @publish="publish" @history="openVersionHistoryFromPublish" @api="openApiFromPublish" @run="openPublishedApp" /></div></div>
       <WorkflowRunLogsPanel v-else-if="activeSection === 'logs'" :runs="runs" @refresh="loadRuns" />
       <WorkflowMonitoringPanel v-else :runs="runs" />
     </div>
