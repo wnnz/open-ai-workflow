@@ -19,9 +19,9 @@ describe('WorkflowDesignerSidebar', () => {
 
     expect(wrapper.text()).toContain('文档助手')
     expect(wrapper.find('aside > div').text()).toBe('工作室')
-    expect(wrapper.text()).toContain('发布与接入')
+    expect(wrapper.text()).toContain('发布')
     expect(wrapper.get('button[aria-current="page"]').text()).toContain('编排')
-    await wrapper.findAll('nav button').find(button => button.text().includes('发布与接入'))!.trigger('click')
+    await wrapper.findAll('nav button').find(button => button.text() === '发布')!.trigger('click')
     await wrapper.get('button[title="收起侧边栏"]').trigger('click')
     await wrapper.get('button[title="设计器帮助"]').trigger('click')
 

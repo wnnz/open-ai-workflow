@@ -66,11 +66,17 @@ cancel it through `POST .../scripts/tests/{task_id}/cancel`.
 - `api`: FastAPI management and published-app APIs
 - `worker`: Celery workflow execution and scheduled-run dispatch
 - `sandbox`: restricted Python script execution service
-- PostgreSQL with pgvector, Redis, and MinIO
+- PostgreSQL with pgvector, Redis, and local persistent file storage
 
-The retired knowledge-base and document-node features are not part of the default stack. A legacy
-`document-worker` image remains behind the optional `document` Compose profile for migration and
-compatibility work only; new document nodes cannot be added from the product UI.
+The retired knowledge-base and document-node features are not part of the stack. New document
+nodes cannot be added from the product UI; legacy document nodes remain readable for migration
+compatibility but cannot execute.
+
+Scheduled workflow dispatch is optional. Start Celery beat only when scheduled workflows are used:
+
+```powershell
+docker compose --profile schedule up -d beat
+```
 
 ## Database migrations
 
@@ -100,8 +106,8 @@ non-root user, uses a restricted Docker API proxy, and starts runtime containers
 capabilities, a root-owned application filesystem, a private writable `/tmp` mount,
 PID/memory/CPU limits, and networking disabled by
 default. Each execution is staged in its own ephemeral container layer; jobs do not share a volume.
-The sandbox uses a distinct `SANDBOX_SHARED_SECRET` and cannot reach the database, Redis, or MinIO
-networks. PostgreSQL, Redis, MinIO, and the sandbox API are internal-only Compose services.
+The sandbox uses a distinct `SANDBOX_SHARED_SECRET` and cannot reach the database, Redis, or file
+storage. PostgreSQL, Redis, and the sandbox API are internal-only Compose services.
 `MAX_REQUEST_BODY_BYTES` limits fixed-length and chunked request bodies before parsing.
 Credentials are encrypted at rest and never returned by API responses. Workspace authorization is
 enforced server-side for every scoped resource. Replace every example secret before deployment.

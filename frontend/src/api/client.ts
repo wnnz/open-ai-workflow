@@ -9,7 +9,10 @@ api.interceptors.request.use(config => {
 api.interceptors.response.use(response => response, error => {
   if (error.response?.status === 401) {
     localStorage.removeItem('access_token'); localStorage.removeItem('user')
-    if (location.pathname !== '/login') location.assign('/login')
+    if (location.pathname !== '/login') {
+      const returnTo = `${location.pathname}${location.search}${location.hash}`
+      location.assign(`/login?redirect=${encodeURIComponent(returnTo)}`)
+    }
   }
   return Promise.reject(error)
 })

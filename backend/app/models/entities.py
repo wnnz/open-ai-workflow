@@ -158,7 +158,6 @@ class Workflow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
-
 class WorkflowEnvironmentVariable(Base):
     __tablename__ = "workflow_environment_variables"
     __table_args__ = (UniqueConstraint("workflow_id", "name"),)
@@ -172,6 +171,26 @@ class WorkflowEnvironmentVariable(Base):
     created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class WorkflowAccessGrant(Base):
+    __tablename__ = "workflow_access_grants"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    workflow_id: Mapped[str] = mapped_column(
+        ForeignKey("workflows.id", ondelete="CASCADE"), index=True
+    )
+    grant_type: Mapped[str] = mapped_column(String(20), index=True)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    label: Mapped[str] = mapped_column(String(120), default="")
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class WorkflowVersion(Base):

@@ -5,7 +5,7 @@ import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { Background } from '@vue-flow/background'
 import { VueFlow, useVueFlow, type Connection, type Edge, type Node, type NodeMouseEvent } from '@vue-flow/core'
 import { MiniMap } from '@vue-flow/minimap'
-import { Activity, AlertTriangle, ArrowLeft, Bot, Braces, BrainCircuit, Check, ChevronRight, CircleStop, Code2, Combine, Copy, FileText, GitBranch, GitMerge, Globe2, History, Images, ListChecks, ListFilter, ListTree, MousePointer2, Play, Plus, RefreshCw, Repeat2, Rocket, Save, ScanText, Search, Timer, UserCheck, Workflow, X } from 'lucide-vue-next'
+import { Activity, AlertTriangle, ArrowLeft, Bot, Braces, BrainCircuit, Check, ChevronRight, CircleStop, Code2, Combine, Copy, FileText, GitBranch, GitMerge, Globe2, History, Images, ListChecks, ListFilter, ListTree, MousePointer2, Play, Plus, RefreshCw, Repeat2, Save, ScanText, Search, Timer, Trash2, UserCheck, Workflow, X } from 'lucide-vue-next'
 import api from '@/api/client'
 import { messages } from '@/i18n'
 import VariableField from '@/components/VariableField.vue'
@@ -99,7 +99,8 @@ const canvasHost = ref<HTMLElement | null>(null); const nodeContextMenu = ref<{ 
 const loaded = ref(false); const saveError = ref(''); const saveConflict = ref(false); const lastSavedAt = ref<Date | null>(null)
 const dirty = ref(false); const editRevision = ref(0)
 const activeSection = ref<DesignerSection>('orchestration'); const versions = ref<any[]>([]); const showHistory = ref(false); const showHelp = ref(false)
-const showChecklist = ref(false); const showChangeHistory = ref(false); const showPublish = ref(false); const pendingRestoreVersion = ref<any>(null); const restoringVersion = ref(false)
+const showApiAccess = ref(false)
+const showChecklist = ref(false); const showChangeHistory = ref(false); const pendingRestoreVersion = ref<any>(null); const restoringVersion = ref(false)
 const sidebarCollapsed = ref(false)
 const expandedStartFieldIndex = ref<number | null>(null)
 const showVariableInspector = ref(false); const variableSearch = ref(''); const copiedVariablePath = ref('')
@@ -444,7 +445,7 @@ function handleBeforeUnload(event: BeforeUnloadEvent) {
   event.preventDefault()
   event.returnValue = ''
 }
-async function publish(payload: { change_note: string; access: 'public' | 'protected' } = { change_note: 'Published from designer', access: 'public' }) {
+async function publish(payload: any = { change_note: 'Published from designer', access: 'public' }) {
   if (validationIssues.value.length) { showChecklist.value = true; return }
   publishing.value = true
   try {
@@ -458,16 +459,16 @@ async function publish(payload: { change_note: string; access: 'public' | 'prote
 }
 async function loadVersions() { versions.value = (await api.get(`/workspaces/${workspaceId.value}/workflows/${workflowId.value}/versions`)).data }
 async function openPublish() {
-  if (!showPublish.value) await loadVersions()
+  await loadVersions()
   showChecklist.value = false; showEnvironment.value = false; showSystemVariables.value = false
-  showPublish.value = !showPublish.value
+  activeSection.value = 'api'
 }
-function toggleEnvironment() { environmentError.value = ''; showChecklist.value = false; showPublish.value = false; showSystemVariables.value = false; showEnvironment.value = !showEnvironment.value }
-function toggleSystemVariables() { showChecklist.value = false; showPublish.value = false; showEnvironment.value = false; showSystemVariables.value = !showSystemVariables.value }
+function toggleEnvironment() { environmentError.value = ''; showChecklist.value = false; showSystemVariables.value = false; showEnvironment.value = !showEnvironment.value }
+function toggleSystemVariables() { showChecklist.value = false; showEnvironment.value = false; showSystemVariables.value = !showSystemVariables.value }
 function openPublishedApp() { window.open(`${origin}/apps/${workflow.value.slug}`, '_blank', 'noopener,noreferrer') }
-function openApiFromPublish() { showPublish.value = false; showSection('api') }
-async function openVersionHistoryFromPublish() { showPublish.value = false; await openHistory() }
-async function showSection(section: typeof activeSection.value) { activeSection.value = section; if (section === 'logs' || section === 'monitoring') await loadRuns() }
+function openApiFromPublish() { showApiAccess.value = true }
+async function openVersionHistoryFromPublish() { await openHistory() }
+async function showSection(section: typeof activeSection.value) { activeSection.value = section; if (section === 'api') await loadVersions(); if (section === 'logs' || section === 'monitoring') await loadRuns() }
 async function openHistory() { await loadVersions(); showHistory.value = true }
 function openChangeHistory() { pushHistory(); showChangeHistory.value = true }
 function restoreLocalSnapshot(index: number) { restoreHistory(index); showChangeHistory.value = false }
@@ -1088,7 +1089,7 @@ function formatRuntimeValue(value: any) {
   try { return JSON.stringify(value, null, 2) } catch { return String(value) }
 }
 function handleKeydown(event: KeyboardEvent) {
-  const command = event.ctrlKey || event.metaKey; const key = event.key.toLowerCase()
+  const command = event.ctrlKey || event.metaKey; const key = event.key?.toLowerCase() ?? ''
   if (command && key === 'k') { event.preventDefault(); showCommandPalette.value = !showCommandPalette.value; return }
   if (event.key === 'Escape' && showCommandPalette.value) { showCommandPalette.value = false; return }
   if (event.key === 'Escape' && paletteOpen.value) { paletteOpen.value = false; paletteReplaceNodeId.value = null; return }
@@ -1183,10 +1184,6 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
             <WorkflowSystemVariablesPanel v-if="showSystemVariables" @close="showSystemVariables = false" />
           </div>
           <button class="icon-button surface" :title="t('common.save')" @click="save"><Save :size="16" /></button>
-          <div class="relative">
-            <Button :loading="publishing" @click="openPublish"><Rocket :size="15" />{{ t('workflow.publish') }}</Button>
-            <PublishPopover :open="showPublish" :workflow="workflow" :versions="versions" :publishing="publishing" @close="showPublish = false" @publish="publish" @history="openVersionHistoryFromPublish" @api="openApiFromPublish" @run="openPublishedApp" />
-          </div>
           </div>
         </template>
       </header>
@@ -1329,10 +1326,11 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
           </template>
         </WorkflowNodeInspector>
       </div>
-      <WorkflowApiPanel v-else-if="activeSection === 'api'" :origin="origin" :slug="workflow?.slug" :triggers="startNode?.data?.config?.triggers" :input-fields="startFields" />
+      <div v-else-if="activeSection === 'api'" class="h-full overflow-y-auto bg-[var(--app-bg)] p-6"><div class="mx-auto max-w-5xl"><PublishPopover :open="true" :workflow="workflow" :versions="versions" :publishing="publishing" @publish="publish" @history="openVersionHistoryFromPublish" @api="openApiFromPublish" @run="openPublishedApp" /></div></div>
       <WorkflowRunLogsPanel v-else-if="activeSection === 'logs'" :runs="runs" @refresh="loadRuns" />
       <WorkflowMonitoringPanel v-else :runs="runs" />
     </div>
+    <ModalShell v-model="showApiAccess" :title="t('designer.apiTitle')" :description="t('designer.apiHint')" max-width="max-w-4xl"><WorkflowApiPanel compact :origin="origin" :slug="workflow?.slug" :triggers="startNode?.data?.config?.triggers" :input-fields="startFields" /></ModalShell>
     <ModalShell v-model="showChangeHistory" :title="t('designer.changeHistory')" :description="t('designer.localHistoryHint')" body-class="max-h-[430px] p-2"><button v-for="entry in localHistoryEntries" :key="entry.index" class="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left hover:bg-[var(--panel-subtle)]" :class="{ 'bg-[var(--primary-soft)]': entry.index === historyIndex }" @click="restoreLocalSnapshot(entry.index)"><span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full" :class="entry.index === historyIndex ? 'bg-[var(--primary)] text-white' : 'bg-[var(--panel-subtle)] text-[var(--muted)]'"><History :size="14" /></span><span class="min-w-0 flex-1"><span class="block text-xs font-semibold">{{ entry.index === historyIndex ? t('designer.currentState') : t('designer.changeSnapshot', { index: entry.index + 1 }) }}</span><span class="muted mt-1 block text-[10px]">{{ t('designer.historyEntry', { nodes: entry.state.nodes.length, edges: entry.state.edges.length }) }}</span></span><span class="muted text-[10px]">{{ entry.time?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }}</span></button></ModalShell>
     <ModalShell v-model="showHistory" :title="t('designer.history')" :description="t('designer.versionHistoryHint')" max-width="max-w-2xl" body-class="max-h-[520px] space-y-2 p-4"><div v-for="item in versions" :key="item.id" class="rounded-lg border border-[var(--border)] p-4"><div class="flex items-start gap-3"><span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--primary-soft)] text-xs font-bold text-[var(--primary)]">v{{ item.version }}</span><div class="min-w-0 flex-1"><div class="flex items-center gap-2 text-sm font-semibold">{{ item.change_note }}<span v-if="item.id === workflow?.published_version_id" class="rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">{{ t('designer.currentPublished') }}</span></div><div class="muted mt-1 text-[10px]">{{ new Date(item.created_at).toLocaleString() }}</div><div class="mt-2 flex flex-wrap gap-1.5 text-[10px]"><span class="rounded bg-emerald-50 px-2 py-1 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">+{{ versionDiff(item).added }} {{ t('designer.nodesShort') }}</span><span class="rounded bg-red-50 px-2 py-1 text-red-700 dark:bg-red-950/30 dark:text-red-300">-{{ versionDiff(item).removed }} {{ t('designer.nodesShort') }}</span><span class="rounded bg-amber-50 px-2 py-1 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">~{{ versionDiff(item).changed }} {{ t('designer.nodesShort') }}</span><span class="rounded bg-[var(--panel-subtle)] px-2 py-1 text-[var(--muted)]">{{ versionDiff(item).versionEdges }} → {{ versionDiff(item).currentEdges }} {{ t('designer.edgesShort') }}</span></div></div><Button variant="secondary" @click="pendingRestoreVersion = item">{{ t('designer.restoreDraft') }}</Button></div></div><div v-if="!versions.length" class="muted py-12 text-center text-sm">{{ t('common.empty') }}</div></ModalShell>
     <ModalShell :model-value="Boolean(pendingRestoreVersion)" :title="t('designer.restoreConfirmTitle', { version: pendingRestoreVersion?.version })" max-width="max-w-md" @update:model-value="pendingRestoreVersion = null"><div class="flex h-10 w-10 items-center justify-center rounded-full bg-amber-50 text-amber-600 dark:bg-amber-950/40"><AlertTriangle :size="20" /></div><p class="muted mt-4 text-sm leading-6">{{ t('designer.restoreConfirmText') }}</p><template #footer><Button variant="secondary" :disabled="restoringVersion" @click="pendingRestoreVersion = null">{{ t('common.cancel') }}</Button><Button :loading="restoringVersion" @click="restorePublishedVersion">{{ t('designer.restoreDraft') }}</Button></template></ModalShell>

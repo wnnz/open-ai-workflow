@@ -3,20 +3,22 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.api.deps import CurrentUser, DbSession
 from app.core.config import get_settings
-from app.core.security import decrypt_secret, encrypt_secret
+from app.core.security import decrypt_secret, encrypt_secret, hash_password
 from app.models.entities import (
     Script,
     ScriptVersion,
     StoredFile,
     Workflow,
+    WorkflowAccessGrant,
     WorkflowApproval,
     WorkflowEnvironmentVariable,
     WorkflowRun,
     WorkflowVersion,
+    WorkspaceMember,
 )
 from app.schemas.common import ApiModel
 from app.schemas.workflow import (
@@ -27,6 +29,7 @@ from app.schemas.workflow import (
     RunOut,
     RunPage,
     RunSummaryOut,
+    WorkflowAccessGrantOut,
     WorkflowCreate,
     WorkflowEnvironmentVariableCreate,
     WorkflowEnvironmentVariableOut,
@@ -216,6 +219,34 @@ async def read_workflow(
     return await get_workflow(db, workspace_id, workflow_id)
 
 
+@router.get("/{workflow_id}/access-grants", response_model=list[WorkflowAccessGrantOut])
+async def list_access_grants(
+    workspace_id: str, workflow_id: str, db: DbSession, user: CurrentUser
+) -> list[dict]:
+    await require_role(db, workspace_id, user.id)
+    await get_workflow(db, workspace_id, workflow_id)
+    grants = list(
+        (
+            await db.scalars(
+                select(WorkflowAccessGrant)
+                .where(WorkflowAccessGrant.workflow_id == workflow_id)
+                .order_by(WorkflowAccessGrant.created_at, WorkflowAccessGrant.id)
+            )
+        ).all()
+    )
+    return [
+        {
+            "id": grant.id,
+            "grant_type": grant.grant_type,
+            "user_id": grant.user_id,
+            "label": grant.label,
+            "expires_at": grant.expires_at,
+            "has_password": bool(grant.password_hash),
+        }
+        for grant in grants
+    ]
+
+
 def environment_variable_out(variable: WorkflowEnvironmentVariable) -> dict:
     secret = variable.value_type == "secret"
     value = decrypt_secret(variable.encrypted_value)
@@ -358,6 +389,88 @@ async def publish_workflow(
 ) -> WorkflowVersion:
     await require_role(db, workspace_id, user.id, "editor")
     workflow = await get_workflow(db, workspace_id, workflow_id)
+    access_grants: list[WorkflowAccessGrant] = []
+    if payload.access == "protected":
+        now = datetime.now(UTC)
+
+        def future_expiry(value: datetime | None) -> datetime | None:
+            if value and value.tzinfo is None:
+                value = value.replace(tzinfo=UTC)
+            if value and value <= now:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    "Access grant expiry must be in the future",
+                )
+            return value
+
+        if payload.all_users_enabled:
+            access_grants.append(
+                WorkflowAccessGrant(
+                    workspace_id=workspace_id,
+                    workflow_id=workflow.id,
+                    grant_type="all_users",
+                    label="All signed-in users",
+                    expires_at=future_expiry(payload.all_users_expires_at),
+                    created_by=user.id,
+                )
+            )
+        requested_user_ids = [item.user_id for item in payload.user_grants]
+        if requested_user_ids:
+            member_ids = set(
+                await db.scalars(
+                    select(WorkspaceMember.user_id).where(
+                        WorkspaceMember.workspace_id == workspace_id,
+                        WorkspaceMember.user_id.in_(requested_user_ids),
+                    )
+                )
+            )
+            if member_ids != set(requested_user_ids):
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    "Selected users must be workspace members",
+                )
+        for item in payload.user_grants:
+            access_grants.append(
+                WorkflowAccessGrant(
+                    workspace_id=workspace_id,
+                    workflow_id=workflow.id,
+                    grant_type="user",
+                    user_id=item.user_id,
+                    expires_at=future_expiry(item.expires_at),
+                    created_by=user.id,
+                )
+            )
+        existing_passwords = {
+            grant.id: grant.password_hash
+            for grant in (
+                await db.scalars(
+                    select(WorkflowAccessGrant).where(
+                        WorkflowAccessGrant.workflow_id == workflow.id,
+                        WorkflowAccessGrant.grant_type == "password",
+                    )
+                )
+            ).all()
+        }
+        for index, item in enumerate(payload.password_grants, start=1):
+            password_hash = hash_password(item.password) if item.password else None
+            if not password_hash and item.id:
+                password_hash = existing_passwords.get(item.id)
+            if not password_hash:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    "Each password grant requires a password of at least 8 characters",
+                )
+            access_grants.append(
+                WorkflowAccessGrant(
+                    workspace_id=workspace_id,
+                    workflow_id=workflow.id,
+                    grant_type="password",
+                    label=item.label.strip() or f"Password {index}",
+                    password_hash=password_hash,
+                    expires_at=future_expiry(item.expires_at),
+                    created_by=user.id,
+                )
+            )
     publish_graph, subworkflow_references = await resolve_subworkflow_references(
         db,
         workspace_id,
@@ -406,6 +519,10 @@ async def publish_workflow(
     )
     db.add(version)
     await db.flush()
+    await db.execute(
+        delete(WorkflowAccessGrant).where(WorkflowAccessGrant.workflow_id == workflow.id)
+    )
+    db.add_all(access_grants)
     workflow.published_version_id = version.id
     workflow.published_access = payload.access
     workflow.next_run_at = next_schedule_at(publish_graph)
@@ -416,7 +533,15 @@ async def publish_workflow(
             "workflow.published",
             "workflow",
             workflow.id,
-            {"version": next_version, "access": payload.access},
+            {
+                "version": next_version,
+                "access": payload.access,
+                "access_grants": {
+                    "all_users": sum(grant.grant_type == "all_users" for grant in access_grants),
+                    "users": sum(grant.grant_type == "user" for grant in access_grants),
+                    "passwords": sum(grant.grant_type == "password" for grant in access_grants),
+                },
+            },
         )
     )
     await db.commit()

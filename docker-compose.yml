@@ -3,7 +3,7 @@ name: weaverun
 x-build-proxy: &build-proxy
   HTTP_PROXY: ${CONTAINER_HTTP_PROXY:-http://host.docker.internal:10808}
   HTTPS_PROXY: ${CONTAINER_HTTP_PROXY:-http://host.docker.internal:10808}
-  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,postgres,redis,minio,api,worker,sandbox,sandbox-docker-proxy,document-worker}
+  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,postgres,redis,api,worker,sandbox,sandbox-docker-proxy}
 
 x-backend: &backend
   image: weaverun-api
@@ -12,14 +12,14 @@ x-backend: &backend
     args: *build-proxy
   restart: unless-stopped
   env_file: .env
+  volumes:
+    - file-data:/data/files
   extra_hosts:
     - "host.docker.internal:host-gateway"
   depends_on:
     postgres:
       condition: service_healthy
     redis:
-      condition: service_healthy
-    minio:
       condition: service_healthy
 
 services:
@@ -51,21 +51,6 @@ services:
       timeout: 3s
       retries: 20
 
-  minio:
-    image: minio/minio:latest
-    restart: unless-stopped
-    command: server /data --console-address :9001
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set}
-    volumes:
-      - minio-data:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
   api:
     <<: *backend
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
@@ -89,6 +74,7 @@ services:
 
   beat:
     <<: *backend
+    profiles: ["schedule"]
     command: celery -A app.worker.celery beat --loglevel=INFO
 
   sandbox:
@@ -131,15 +117,6 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  document-worker:
-    profiles: ["document"]
-    build:
-      context: ./document-worker
-      args: *build-proxy
-    restart: unless-stopped
-    ports:
-      - "8082:8082"
-
   web:
     build:
       context: ./frontend
@@ -156,8 +133,8 @@ volumes:
     name: weaverun_postgres-data
   redis-data:
     name: weaverun_redis-data
-  minio-data:
-    name: weaverun_minio-data
+  file-data:
+    name: weaverun_file-data
   sandbox-proxy-config:
     name: weaverun_sandbox-proxy-config
 

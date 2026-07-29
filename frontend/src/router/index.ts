@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { safeLocalRedirect } from '@/utils/navigation'
 const AdminUsersPage = () => import('@/pages/AdminUsersPage.vue')
 const LoginPage = () => import('@/pages/LoginPage.vue')
 const MembersPage = () => import('@/pages/MembersPage.vue')
@@ -34,19 +35,21 @@ let sessionHydrated = false
 router.beforeEach(async to => {
   const token = localStorage.getItem('access_token')
   const workspaceId = localStorage.getItem('workspace_id')
-  if (!to.meta.public && !token) return '/login'
+  if (!to.meta.public && !token) return { path: '/login', query: { redirect: to.fullPath } }
   const auth = useAuthStore()
   if (token && !sessionHydrated) {
     try { await auth.refresh() }
     catch {
       auth.logout()
-      if (!to.meta.public) return '/login'
+      if (!to.meta.public) return { path: '/login', query: { redirect: to.fullPath } }
     }
     finally { sessionHydrated = true }
   }
   if (to.meta.platformAdmin) {
     if (!auth.user?.is_platform_admin) return '/'
   }
+  const returnTo = to.path === '/login' ? safeLocalRedirect(to.query.redirect) : null
+  if (to.path === '/login' && token && returnTo) return returnTo
   if (to.path === '/login' && token && workspaceId) return `/w/${workspaceId}/studio`
   if (to.path === '/login' && token && !workspaceId) {
     localStorage.removeItem('access_token')

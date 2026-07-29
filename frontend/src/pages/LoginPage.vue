@@ -1,21 +1,23 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Languages, Moon, Sparkles, Sun } from 'lucide-vue-next'
 import Button from '@/volt/Button.vue'; import InputText from '@/volt/InputText.vue'
 import AlertBanner from '@/components/ui/AlertBanner.vue'; import FormField from '@/components/ui/FormField.vue'
 import { useAuthStore } from '@/stores/auth'; import { usePreferencesStore } from '@/stores/preferences'
 import { useWorkspacesStore } from '@/stores/workspaces'
+import { safeLocalRedirect } from '@/utils/navigation'
 
-const { t } = useI18n(); const router = useRouter(); const auth = useAuthStore(); const preferences = usePreferencesStore(); const workspaces = useWorkspacesStore()
+const { t } = useI18n(); const route = useRoute(); const router = useRouter(); const auth = useAuthStore(); const preferences = usePreferencesStore(); const workspaces = useWorkspacesStore()
 const registerMode = ref(false); const email = ref(''); const password = ref(''); const name = ref(''); const error = ref(''); const loading = ref(false)
 async function submit() {
   loading.value = true; error.value = ''
   try {
     registerMode.value ? await auth.register(email.value, password.value, name.value) : await auth.login(email.value, password.value)
     await workspaces.load()
-    router.push(workspaces.activeId ? `/w/${workspaces.activeId}/studio` : '/workspaces/new')
+    const returnTo = safeLocalRedirect(route.query.redirect)
+    await router.replace(returnTo || (workspaces.activeId ? `/w/${workspaces.activeId}/studio` : '/workspaces/new'))
   }
   catch (cause: any) { error.value = cause.response?.data?.detail || String(cause) }
   finally { loading.value = false }

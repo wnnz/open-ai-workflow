@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.common import ApiModel
 
@@ -60,9 +60,44 @@ class WorkflowOut(ApiModel):
     updated_at: datetime
 
 
+class UserAccessGrantIn(BaseModel):
+    user_id: str = Field(min_length=1, max_length=36)
+    expires_at: datetime | None = None
+
+
+class PasswordAccessGrantIn(BaseModel):
+    id: str | None = Field(default=None, max_length=36)
+    label: str = Field(default="", max_length=120)
+    password: str | None = Field(default=None, min_length=1, max_length=200)
+    expires_at: datetime | None = None
+
+
+class WorkflowAccessGrantOut(ApiModel):
+    id: str
+    grant_type: str
+    user_id: str | None
+    label: str
+    expires_at: datetime | None
+    has_password: bool = False
+
+
 class PublishIn(BaseModel):
     change_note: str = "Published update"
     access: str = Field(default="public", pattern="^(public|protected)$")
+    all_users_enabled: bool = False
+    all_users_expires_at: datetime | None = None
+    user_grants: list[UserAccessGrantIn] = Field(default_factory=list, max_length=500)
+    password_grants: list[PasswordAccessGrantIn] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_grants(self) -> "PublishIn":
+        if self.access == "protected" and not (
+            self.all_users_enabled or self.user_grants or self.password_grants
+        ):
+            raise ValueError("At least one protected access grant is required")
+        if len({item.user_id for item in self.user_grants}) != len(self.user_grants):
+            raise ValueError("A user can only have one access grant")
+        return self
 
 
 class WorkflowVersionOut(ApiModel):

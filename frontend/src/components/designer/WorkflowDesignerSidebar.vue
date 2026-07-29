@@ -70,7 +70,7 @@ function cancelRename() {
 
 const navigation: Array<{ id: DesignerSection; icon: typeof Sparkles; label: string }> = [
   { id: 'orchestration', icon: Sparkles, label: 'designer.orchestration' },
-  { id: 'api', icon: Code2, label: 'designer.apiAccess' },
+  { id: 'api', icon: Code2, label: 'designer.publishMenu' },
   { id: 'logs', icon: Logs, label: 'designer.logs' },
   { id: 'monitoring', icon: Monitor, label: 'designer.monitoring' },
 ]

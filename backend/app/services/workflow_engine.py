@@ -906,7 +906,7 @@ def build_node_trace_metadata(
     context: dict[str, Any],
 ) -> dict[str, Any]:
     node_type = str(node.get("type") or "")
-    executor = "sandbox" if node_type in {"code", "script"} else "network" if node_type == "http" else "model" if node_type in {"llm", "image", "agent", "classifier", "extract"} else "document-worker" if node_type == "document" else "built-in"
+    executor = "sandbox" if node_type in {"code", "script"} else "network" if node_type == "http" else "model" if node_type in {"llm", "image", "agent", "classifier", "extract"} else "unsupported" if node_type == "document" else "built-in"
     environment = context.get("env", {})
     secrets = list(environment.values()) if isinstance(environment, dict) else []
     logs = output.get("_logs", []) if isinstance(output, dict) else []

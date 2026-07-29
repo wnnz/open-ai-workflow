@@ -3,6 +3,7 @@ import io
 import os
 import zipfile
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import sleep as sleep_for_test
 from unittest.mock import AsyncMock
@@ -547,7 +548,7 @@ def test_protected_publish_accepts_scoped_api_key(client: TestClient):
     published = client.post(
         f"/api/v1/workspaces/{workspace_id}/workflows/{workflow['id']}/publish",
         headers=auth(session),
-        json={"access": "protected"},
+        json={"access": "protected", "all_users_enabled": True},
     )
     assert published.status_code == 200, published.text
     denied = client.post(f"/v1/apps/{workflow['slug']}/run", json={"inputs": {"value": 7}})
@@ -566,6 +567,93 @@ def test_protected_publish_accepts_scoped_api_key(client: TestClient):
     )
     assert allowed.status_code == 200, allowed.text
     assert allowed.json()["status"] == "succeeded"
+
+    form_graph = deepcopy(graph)
+    form_start = next(node for node in form_graph["nodes"] if node["type"] == "start")
+    form_start["data"]["config"]["triggers"] = ["form"]
+    form_saved = client.put(
+        f"/api/v1/workspaces/{workspace_id}/workflows/{workflow['id']}",
+        headers=auth(session),
+        json={"graph": form_graph, "expected_version": saved.json()["draft_version"]},
+    )
+    assert form_saved.status_code == 200, form_saved.text
+    workspace_members = client.get(
+        f"/api/v1/workspaces/{workspace_id}/members", headers=auth(session)
+    ).json()
+    assert len(workspace_members) >= 2
+    other_member_id = next(
+        item["user"]["id"]
+        for item in workspace_members
+        if item["user"]["id"] != session["user"]["id"]
+    )
+    member_ids = [session["user"]["id"], other_member_id]
+    tomorrow = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+    day_after = (datetime.now(UTC) + timedelta(days=2)).isoformat()
+    three_days = (datetime.now(UTC) + timedelta(days=3)).isoformat()
+    four_days = (datetime.now(UTC) + timedelta(days=4)).isoformat()
+    form_published = client.post(
+        f"/api/v1/workspaces/{workspace_id}/workflows/{workflow['id']}/publish",
+        headers=auth(session),
+        json={
+            "access": "protected",
+            "user_grants": [
+                {"user_id": member_ids[0], "expires_at": tomorrow},
+                {"user_id": member_ids[1], "expires_at": day_after},
+            ],
+            "password_grants": [
+                {"label": "Partner one", "password": "123456", "expires_at": three_days},
+                {"label": "Partner two", "password": "partner-pass-2", "expires_at": four_days},
+            ],
+        },
+    )
+    assert form_published.status_code == 200, form_published.text
+
+    form_url = f"/v1/apps/{workflow['slug']}/form"
+    assert client.post(form_url, json={"inputs": {"value": 8}}).status_code == 401
+    assert client.post(
+        form_url,
+        headers={"Authorization": f"Bearer {key}"},
+        json={"inputs": {"value": 8}},
+    ).status_code == 401
+    form_run = client.post(
+        form_url,
+        headers=auth(session),
+        json={"inputs": {"value": 8}},
+    )
+    assert form_run.status_code == 200, form_run.text
+    assert form_run.json()["status"] == "succeeded"
+    run_id = form_run.json()["run_id"]
+    protected_run = client.get(
+        f"/v1/apps/{workflow['slug']}/runs/{run_id}", headers=auth(session)
+    )
+    assert protected_run.status_code == 200, protected_run.text
+    grants = client.get(
+        f"/api/v1/workspaces/{workspace_id}/workflows/{workflow['id']}/access-grants",
+        headers=auth(session),
+    )
+    assert grants.status_code == 200, grants.text
+    assert [item["grant_type"] for item in grants.json()].count("user") == 2
+    assert [item["grant_type"] for item in grants.json()].count("password") == 2
+    assert all(item["expires_at"] for item in grants.json())
+
+    assert client.post(
+        f"/v1/apps/{workflow['slug']}/access", json={"password": "wrong-password"}
+    ).status_code == 401
+    password_access = client.post(
+        f"/v1/apps/{workflow['slug']}/access", json={"password": "123456"}
+    )
+    assert password_access.status_code == 200, password_access.text
+    app_access = {"X-App-Access": password_access.json()["access_token"]}
+    password_run = client.post(
+        form_url,
+        headers=app_access,
+        json={"inputs": {"value": 9}},
+    )
+    assert password_run.status_code == 200, password_run.text
+    password_run_id = password_run.json()["run_id"]
+    assert client.get(
+        f"/v1/apps/{workflow['slug']}/runs/{password_run_id}", headers=app_access
+    ).status_code == 200
 
 
 def test_start_node_uses_one_trigger_and_validates_inputs(client: TestClient):

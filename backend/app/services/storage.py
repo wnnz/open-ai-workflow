@@ -1,52 +1,38 @@
 import hashlib
 import io
 import secrets
-from datetime import timedelta
+from pathlib import Path, PurePosixPath
 from typing import BinaryIO
-
-from minio import Minio
 
 from app.core.config import get_settings
 
-
-def client() -> Minio:
-    settings = get_settings()
-    return Minio(
-        settings.minio_endpoint,
-        access_key=settings.minio_access_key,
-        secret_key=settings.minio_secret_key,
-        secure=settings.minio_secure,
-    )
+CHUNK_SIZE = 1024 * 1024
 
 
-def ensure_bucket() -> None:
-    settings = get_settings()
-    storage = client()
-    if not storage.bucket_exists(settings.minio_bucket):
-        storage.make_bucket(settings.minio_bucket)
+def storage_root() -> Path:
+    root = Path(get_settings().storage_path).expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def object_path(object_key: str) -> Path:
+    key = PurePosixPath(object_key)
+    if key.is_absolute() or not key.parts or any(part in {"", ".", ".."} for part in key.parts):
+        raise ValueError("Invalid object key")
+    root = storage_root()
+    destination = root.joinpath(*key.parts).resolve()
+    if not destination.is_relative_to(root):
+        raise ValueError("Invalid object key")
+    return destination
+
+
+def create_object_key(workspace_id: str, filename: str) -> str:
+    safe_name = filename.replace("/", "_").replace("\\", "_") or "file"
+    return f"workspaces/{workspace_id}/{secrets.token_hex(12)}/{safe_name}"
 
 
 def put(workspace_id: str, filename: str, content_type: str, content: bytes) -> tuple[str, str]:
-    settings = get_settings()
-    ensure_bucket()
-    safe_name = filename.replace("/", "_").replace("\\", "_")
-    key = f"workspaces/{workspace_id}/{secrets.token_hex(12)}/{safe_name}"
-    client().put_object(
-        settings.minio_bucket, key, io.BytesIO(content), len(content), content_type=content_type
-    )
-    return key, hashlib.sha256(content).hexdigest()
-
-
-class HashingReader:
-    def __init__(self, stream: BinaryIO) -> None:
-        self.stream = stream
-        self.digest = hashlib.sha256()
-
-    def read(self, size: int = -1) -> bytes:
-        chunk = self.stream.read(size)
-        if chunk:
-            self.digest.update(chunk)
-        return chunk
+    return put_stream(workspace_id, filename, content_type, io.BytesIO(content), len(content))
 
 
 def put_stream(
@@ -56,28 +42,27 @@ def put_stream(
     stream: BinaryIO,
     size: int,
 ) -> tuple[str, str]:
-    settings = get_settings()
-    ensure_bucket()
-    safe_name = filename.replace("/", "_").replace("\\", "_")
-    key = f"workspaces/{workspace_id}/{secrets.token_hex(12)}/{safe_name}"
-    hashing_stream = HashingReader(stream)
-    client().put_object(
-        settings.minio_bucket,
-        key,
-        hashing_stream,
-        size,
-        content_type=content_type,
-    )
-    return key, hashing_stream.digest.hexdigest()
-
-
-def presigned_get(object_key: str) -> str:
-    settings = get_settings()
-    return client().presigned_get_object(
-        settings.minio_bucket, object_key, expires=timedelta(minutes=15)
-    )
+    del content_type
+    key = create_object_key(workspace_id, filename)
+    destination = object_path(key)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.{secrets.token_hex(8)}.part")
+    digest = hashlib.sha256()
+    written = 0
+    try:
+        with temporary.open("xb") as target:
+            while chunk := stream.read(CHUNK_SIZE):
+                target.write(chunk)
+                digest.update(chunk)
+                written += len(chunk)
+        if written != size:
+            raise ValueError(f"Upload size mismatch: expected {size}, received {written}")
+        temporary.replace(destination)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    return key, digest.hexdigest()
 
 
 def remove(object_key: str) -> None:
-    settings = get_settings()
-    client().remove_object(settings.minio_bucket, object_key)
+    object_path(object_key).unlink(missing_ok=True)

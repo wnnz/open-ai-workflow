@@ -40,6 +40,33 @@ def decode_access_token(token: str) -> str:
     return str(payload["sub"])
 
 
+def create_app_access_token(
+    workflow_id: str, grant_id: str, expires_at: datetime | None = None
+) -> str:
+    settings = get_settings()
+    now = datetime.now(UTC)
+    token_expires_at = now + timedelta(hours=12)
+    if expires_at:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        token_expires_at = min(token_expires_at, expires_at)
+    payload = {
+        "sub": workflow_id,
+        "grant_id": grant_id,
+        "kind": "app_access",
+        "iat": now,
+        "exp": token_expires_at,
+    }
+    return jwt.encode(payload, settings.app_secret_key, algorithm="HS256")
+
+
+def decode_app_access_token(token: str) -> tuple[str, str]:
+    payload = jwt.decode(token, get_settings().app_secret_key, algorithms=["HS256"])
+    if payload.get("kind") != "app_access":
+        raise ValueError("Invalid app access token")
+    return str(payload["sub"]), str(payload["grant_id"])
+
+
 def invitation_token() -> tuple[str, str]:
     raw = secrets.token_urlsafe(32)
     return raw, hashlib.sha256(raw.encode()).hexdigest()

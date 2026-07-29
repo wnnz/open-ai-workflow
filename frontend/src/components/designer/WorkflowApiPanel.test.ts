@@ -42,4 +42,14 @@ describe('WorkflowApiPanel', () => {
     expect(wrapper.text()).toContain('当前触发方式不提供公共访问端点。')
     expect(wrapper.text()).not.toContain('cURL')
   })
+
+  it('renders compactly inside the publish dialog', () => {
+    const wrapper = mount(WorkflowApiPanel, {
+      props: { origin: 'https://example.com', slug: 'image-app', triggers: ['form'], compact: true },
+      global: { plugins: [i18n] },
+    })
+
+    expect(wrapper.text()).toContain('GET https://example.com/apps/image-app')
+    expect(wrapper.text()).not.toContain('这里仅展示当前开始节点触发方式可用的访问入口。')
+  })
 })
