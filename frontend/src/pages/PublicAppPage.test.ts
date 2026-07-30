@@ -4,7 +4,6 @@ import { flushPromises, mount } from '@vue/test-utils'
 import axios from 'axios'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { consumeRunEvents } from '@/api/runEvents'
-import { clearToasts, toastMessages } from '@/composables/useToast'
 import PublicAppPage from './PublicAppPage.vue'
 
 const { auth, replace } = vi.hoisted(() => ({
@@ -63,7 +62,6 @@ describe('PublicAppPage', () => {
     auth.logout.mockReset()
     replace.mockReset()
     sessionStorage.clear()
-    clearToasts()
   })
 
   it('prevents duplicate submissions and reads the created run by its fixed id', async () => {
@@ -82,7 +80,7 @@ describe('PublicAppPage', () => {
     await flushPromises()
 
     expect(axios.post).toHaveBeenCalledTimes(1)
-    expect(toastMessages.value.some(toast => toast.message === 'publicApp.running' && toast.tone === 'info')).toBe(true)
+    expect(wrapper.get('[role="status"]').text()).toContain('publicApp.running')
     expect(wrapper.find('[data-testid="output"]').exists()).toBe(false)
 
     finishStream()

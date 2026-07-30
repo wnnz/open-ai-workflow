@@ -96,6 +96,26 @@ export function useWorkflowRuns(options: WorkflowRunOptions) {
     )).data.items
   }
 
+  async function loadLatestRunResults() {
+    nodeResults.value = {}
+    try {
+      const page = (await api.get(
+        `/workspaces/${options.workspaceId.value}/workflows/${options.workflowId.value}/runs`,
+        { params: { limit: 1, offset: 0 } },
+      )).data
+      const latest = Array.isArray(page?.items) ? page.items[0] : null
+      if (!latest?.id) return
+      const detail = (await api.get(
+        `/workspaces/${options.workspaceId.value}/workflows/${options.workflowId.value}/runs/${latest.id}`,
+      )).data
+      const traces = Array.isArray(detail?.trace) ? detail.trace : []
+      nodeResults.value = Object.fromEntries(traces.map((trace: any) => [String(trace.node_id), trace]))
+    } catch {
+      // Run history is supplemental; a failure must not prevent the designer from loading.
+      nodeResults.value = {}
+    }
+  }
+
   async function loadApprovals() {
     approvals.value = (await api.get(
       `/workspaces/${options.workspaceId.value}/workflows/${options.workflowId.value}/approvals`,
@@ -200,6 +220,7 @@ export function useWorkflowRuns(options: WorkflowRunOptions) {
     clearRunOverlay,
     exitReplayMode,
     loadApprovals,
+    loadLatestRunResults,
     loadRuns,
     nodeResults,
     openApprovals,
