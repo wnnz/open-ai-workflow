@@ -468,7 +468,7 @@ export function validateWorkflowGraph(
     }
     if (type === 'image') {
       if (!String(config.provider_id || '').trim() || !String(config.model || '').trim()) issues.push({ code: 'imageModelRequired', nodeId: node.id, params })
-      if (!String(config.prompt || '').trim() || !String(config.size || '').trim()) issues.push({ code: 'imageInputsRequired', nodeId: node.id, params })
+      if (!String(config.prompt || '').trim()) issues.push({ code: 'imageInputsRequired', nodeId: node.id, params })
       const variableCount = typeof config.count === 'string' && /\{\{[^{}]+\}\}/.test(config.count)
       if ((!variableCount && (!Number.isInteger(Number(config.count)) || Number(config.count) < 1 || Number(config.count) > 10)) || !['auto','low','medium','high'].includes(config.quality || 'high') || !['webp','png','jpeg','jpg'].includes(config.output_format || 'webp') || Number(config.output_compression) < 0 || Number(config.output_compression) > 100 || Number(config.timeout_seconds ?? 600) < 30 || Number(config.timeout_seconds ?? 600) > 900) issues.push({ code: 'imageParametersInvalid', nodeId: node.id, params })
     }

@@ -55,10 +55,10 @@ function selectProvider() {
     </label>
 
     <div class="grid grid-cols-2 gap-3">
-      <label class="field-label">{{ $t('designer.imageSize') }}
+      <label v-if="'size' in config" class="field-label">{{ $t('designer.imageSize') }}
         <VariableField v-model="config.size" class="mt-1.5 font-mono" :groups="variableGroups" placeholder="{{inputs.resolution}}" />
       </label>
-      <label class="field-label">{{ $t('designer.imageCount') }}
+      <label class="field-label" :class="{ 'col-span-2': !('size' in config) }">{{ $t('designer.imageCount') }}
         <VariableField v-model="config.count" class="mt-1.5 font-mono" :groups="variableGroups" placeholder="{{inputs.count}}" />
       </label>
     </div>

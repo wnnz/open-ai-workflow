@@ -303,6 +303,20 @@ describe('workflow graph utilities', () => {
     expect(validateWorkflowGraph(configured, edges)).toEqual([])
   })
 
+  it('allows image generation without a size parameter', () => {
+    const image = { id: 'image', type: 'image', position: { x: 0, y: 0 }, data: { nodeType: 'image', label: 'Generate', config: {
+      provider_id: 'provider-1', model: 'gpt-image-2', prompt: '{{inputs.prompt}}', count: 1,
+      quality: 'high', output_format: 'png', output_compression: 100, timeout_seconds: 600,
+    } } }
+    const configured = [
+      { ...nodes[0], data: { nodeType: 'start', config: { triggers: ['api'], input_fields: [{ name: 'prompt' }] } } },
+      image,
+      { ...nodes[2], data: { nodeType: 'end', config: { outputs: [{ name: 'images', type: 'Array', value: '{{image.images}}' }] } } },
+    ]
+    const edges = [{ id: 'a', source: 'start', target: 'image' }, { id: 'b', source: 'image', target: 'end' }]
+    expect(validateWorkflowGraph(configured, edges)).toEqual([])
+  })
+
   it('validates HTTP URL, limits, and authentication while allowing variable URLs', () => {
     const http = { id: 'http', type: 'http', position: { x: 0, y: 0 }, data: { nodeType: 'http', label: 'Request', config: {
       method: 'POST', url: 'ftp://example.test', timeout_seconds: 0, max_response_bytes: 100,

@@ -1890,6 +1890,47 @@ def test_png_image_generation_omits_unsupported_compression(monkeypatch: pytest.
     assert output["images"] == ["data:image/png;base64,iVBORw=="]
 
 
+def test_image_generation_omits_unconfigured_size(monkeypatch: pytest.MonkeyPatch):
+    import app.services.model_execution as model_execution
+
+    calls: list[dict] = []
+
+    def request(runtime: dict, path: str, payload: dict) -> dict:
+        calls.append(payload)
+        return {"data": [{"b64_json": "iVBORw=="}]}
+
+    monkeypatch.setattr(model_execution, "provider_request", request)
+    output = model_execution.execute_image_generation(
+        {
+            "base_url": "https://example.com/v1",
+            "api_key": "runtime-secret",
+            "default_model": "gpt-image-2",
+            "config": {},
+        },
+        {
+            "prompt": "A portrait product photo with a 2:3 aspect ratio",
+            "output_format": "png",
+        },
+    )
+
+    assert "size" not in calls[0]
+    assert output["images"] == ["data:image/png;base64,iVBORw=="]
+
+
+def test_image_config_allows_unconfigured_size():
+    from app.services.workflow_engine import validate_image_config
+
+    validate_image_config(
+        {
+            "provider_id": "provider-1",
+            "model": "gpt-image-2",
+            "prompt": "A portrait product photo with a 2:3 aspect ratio",
+            "size": "",
+            "output_format": "png",
+        }
+    )
+
+
 def test_human_approval_pauses_and_resumes_the_selected_branch(client: TestClient):
     session = register(client, "approval-owner@example.com", "Approval Owner")
     headers = auth(session)

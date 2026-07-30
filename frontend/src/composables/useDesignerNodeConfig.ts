@@ -114,6 +114,12 @@ export function useDesignerNodeConfig(t: Translate) {
     return normalized
   }
 
+  function normalizeImageConfig(config: any) {
+    const normalized = { ...defaultNodeConfig('image'), ...(config || {}) }
+    if (!Object.prototype.hasOwnProperty.call(config || {}, 'size')) delete normalized.size
+    return normalized
+  }
+
   function normalizeHumanConfig(config: any) {
     const normalized = { ...defaultNodeConfig('human'), ...(config || {}) }
     normalized.form_content = config?.form_content || config?.instructions || ''
@@ -131,6 +137,7 @@ export function useDesignerNodeConfig(t: Translate) {
     normalizeEndOutputs,
     normalizeExecutionPolicy,
     normalizeHumanConfig,
+    normalizeImageConfig,
     normalizeLlmConfig,
     normalizeStartField,
   }

@@ -652,7 +652,7 @@ def validate_llm_config(config: dict[str, Any]) -> None:
 
 
 def validate_image_config(config: dict[str, Any]) -> None:
-    for field in ("provider_id", "model", "prompt", "size"):
+    for field in ("provider_id", "model", "prompt"):
         if not isinstance(config.get(field), str) or not config[field].strip():
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Image {field} is required")
     for field in ("count", "output_compression"):

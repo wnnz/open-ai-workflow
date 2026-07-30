@@ -401,8 +401,8 @@ def execute_image_generation(runtime: dict[str, Any], config: dict[str, Any]) ->
         compression = int(config.get("output_compression", 80))
     except (TypeError, ValueError) as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid image generation parameters") from exc
-    if not model or not prompt or not size:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Image model, prompt, and size are required")
+    if not model or not prompt:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Image model and prompt are required")
     if not 1 <= count <= MAX_IMAGE_COUNT:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Image count must be between 1 and 10")
     if output_format not in IMAGE_CONTENT_TYPES or not 0 <= compression <= 100:
@@ -412,11 +412,12 @@ def execute_image_generation(runtime: dict[str, Any], config: dict[str, Any]) ->
         "model": model,
         "prompt": prompt,
         "n": 1,
-        "size": size,
         "quality": str(config.get("quality", "high")),
         "output_format": output_format,
         "background": str(config.get("background", "auto")),
     }
+    if size:
+        payload["size"] = size
     if output_format != "png":
         payload["output_compression"] = compression
     image_runtime = {

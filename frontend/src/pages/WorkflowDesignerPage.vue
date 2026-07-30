@@ -54,7 +54,7 @@ import { executionPolicyNodeTypes, useDesignerNodeConfig } from '@/composables/u
 import { useWorkflowRuns } from '@/composables/useWorkflowRuns'
 
 const { t } = useI18n()
-const { classifierBranchLabel, createClassifierCategory, defaultNodeConfig, normalizeClassifierConfig, normalizeConditionConfig, normalizeEndOutputs, normalizeExecutionPolicy, normalizeHumanConfig, normalizeLlmConfig, normalizeStartField } = useDesignerNodeConfig(t)
+const { classifierBranchLabel, createClassifierCategory, defaultNodeConfig, normalizeClassifierConfig, normalizeConditionConfig, normalizeEndOutputs, normalizeExecutionPolicy, normalizeHumanConfig, normalizeImageConfig, normalizeLlmConfig, normalizeStartField } = useDesignerNodeConfig(t)
 const CodeConfigPanel = defineAsyncComponent(() => import('@/components/designer/CodeConfigPanel.vue'))
 const AggregateConfigPanel = defineAsyncComponent(() => import('@/components/designer/AggregateConfigPanel.vue'))
 const AgentConfigPanel = defineAsyncComponent(() => import('@/components/designer/AgentConfigPanel.vue'))
@@ -321,7 +321,7 @@ async function load() {
       ...defaultNodeConfig(nodeType),
       ...(node.data?.config || {}),
       outputs: normalizeEndOutputs(node.data?.config?.outputs, draftInputFields),
-    } : nodeType === 'condition' ? normalizeConditionConfig(node.data?.config) : nodeType === 'classifier' ? normalizeClassifierConfig(node.data?.config) : nodeType === 'llm' ? normalizeLlmConfig(node.data?.config) : nodeType === 'human' ? normalizeHumanConfig(node.data?.config) : { ...defaultNodeConfig(nodeType), ...(node.data?.config || {}) }
+    } : nodeType === 'condition' ? normalizeConditionConfig(node.data?.config) : nodeType === 'classifier' ? normalizeClassifierConfig(node.data?.config) : nodeType === 'llm' ? normalizeLlmConfig(node.data?.config) : nodeType === 'image' ? normalizeImageConfig(node.data?.config) : nodeType === 'human' ? normalizeHumanConfig(node.data?.config) : { ...defaultNodeConfig(nodeType), ...(node.data?.config || {}) }
     const config = normalizeExecutionPolicy(nodeType, baseConfig)
     const label = defaults[nodeType]?.includes(String(node.data?.label)) ? t(`workflow.nodes.${nodeType}`) : node.data?.label
     if (String(node.data?.label || '').trim() && String(node.data?.label).trim() !== String(label || '').trim()) localizedRenames.push({ id: node.id, from: String(node.data?.label).trim(), to: String(label || '').trim() })
