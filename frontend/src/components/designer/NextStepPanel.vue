@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronRight, GitBranch, Plus } from 'lucide-vue-next'
+import { ChevronRight, GitBranch, Plus, Route } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import NodeConfigSection from './NodeConfigSection.vue'
 
@@ -9,7 +9,8 @@ const { t } = useI18n()
 </script>
 
 <template>
-  <NodeConfigSection class="mt-5 border-t border-[var(--border)] pt-5" :title="t('designer.nextStep')" :hint="t('designer.connectHint')" :count="nodes.length" collapsible>
+  <NodeConfigSection class="mt-5 border-t border-[var(--border)] pt-5" :title="t('designer.nextStep')" :hint="t('designer.connectHint')" :count="nodes.length" kind="flow" collapsible>
+    <template #icon><Route :size="14" /></template>
     <div class="space-y-2">
       <div v-for="node in nodes" :key="node.id" class="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)] p-2.5 text-xs">
         <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--primary-soft)] text-[var(--primary)]"><ChevronRight :size="14" /></span>

@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue'
 import VariableField from '@/components/VariableField.vue'
+import FormField from '@/components/ui/FormField.vue'
 import type { WorkflowVariableGroup } from '@/utils/workflowVariables'
 import InputText from '@/volt/InputText.vue'
 import Select from '@/volt/Select.vue'
+import NodeConfigSection from './NodeConfigSection.vue'
+import NodeSettingCard from './NodeSettingCard.vue'
 
 const props = defineProps<{
   config: any
@@ -34,44 +37,42 @@ function selectProvider() {
 </script>
 
 <template>
-  <section class="mt-5 space-y-5">
-    <div class="space-y-3">
-      <label class="field-label">{{ $t('designer.modelProvider') }} <span class="text-red-500">*</span>
-        <Select v-model="config.provider_id" class="mt-1.5 !h-9 !text-xs" @change="selectProvider">
+  <section class="mt-5">
+    <NodeConfigSection :title="$t('designer.nodeParameters')" :hint="$t('designer.nodeParametersHint')" kind="parameters">
+      <div class="space-y-4">
+        <FormField :label="$t('designer.modelProvider')" required compact>
+          <Select v-model="config.provider_id" @change="selectProvider">
           <option value="">{{ $t('designer.selectModelProvider') }}</option>
           <option v-for="provider in providers" :key="provider.id" :value="provider.id">{{ provider.name }}</option>
-        </Select>
-      </label>
-      <label class="field-label">{{ $t('designer.modelName') }} <span class="text-red-500">*</span>
-        <Select v-model="config.model" class="mt-1.5 !h-9 !text-xs" editable allow-custom-value :filter-options="false" highlight-matches>
+          </Select>
+        </FormField>
+        <FormField :label="$t('designer.modelName')" required compact>
+          <Select v-model="config.model" editable allow-custom-value :filter-options="false" highlight-matches>
           <option v-for="model in modelOptions" :key="model" :value="model">{{ model }}</option>
-        </Select>
-      </label>
-      <p v-if="!providers.length" class="resource-empty">{{ $t('designer.noModels') }}</p>
-    </div>
+          </Select>
+        </FormField>
+        <p v-if="!providers.length" class="resource-empty">{{ $t('designer.noModels') }}</p>
 
-    <label class="field-label">{{ $t('designer.imagePrompt') }} <span class="text-red-500">*</span>
-      <VariableField v-model="config.prompt" class="mt-1.5" :groups="variableGroups" multiline :rows="6" :placeholder="$t('designer.imagePromptPlaceholder')" />
-    </label>
-
-    <div class="grid grid-cols-2 gap-3">
-      <label v-if="'size' in config" class="field-label">{{ $t('designer.imageSize') }}
-        <VariableField v-model="config.size" class="mt-1.5 font-mono" :groups="variableGroups" placeholder="{{inputs.resolution}}" />
-      </label>
-      <label class="field-label" :class="{ 'col-span-2': !('size' in config) }">{{ $t('designer.imageCount') }}
-        <VariableField v-model="config.count" class="mt-1.5 font-mono" :groups="variableGroups" placeholder="{{inputs.count}}" />
-      </label>
-    </div>
-
-    <details class="rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)]" open>
-      <summary class="cursor-pointer px-3 py-2.5 text-xs font-semibold">{{ $t('designer.imageOutputSettings') }}</summary>
-      <div class="grid grid-cols-2 gap-3 border-t border-[var(--border)] p-3">
-        <label class="field-label">{{ $t('designer.imageQuality') }}<Select v-model="config.quality" class="mt-1.5 !h-9 !text-xs"><option v-for="value in ['auto','low','medium','high']" :key="value" :value="value">{{ value }}</option></Select></label>
-        <label class="field-label">{{ $t('designer.imageFormat') }}<Select v-model="config.output_format" class="mt-1.5 !h-9 !text-xs"><option v-for="value in ['webp','png','jpeg']" :key="value" :value="value">{{ value }}</option></Select></label>
-        <label class="field-label">{{ $t('designer.imageCompression') }}<InputText v-model.number="config.output_compression" class="mt-1.5" type="number" min="0" max="100" :disabled="pngOutput" /></label>
-        <label class="field-label">{{ $t('designer.imageBackground') }}<Select v-model="config.background" class="mt-1.5 !h-9 !text-xs"><option v-for="value in ['auto','opaque','transparent']" :key="value" :value="value">{{ value }}</option></Select></label>
-        <label class="field-label col-span-2">{{ $t('designer.imageTimeout') }}<InputText v-model.number="config.timeout_seconds" class="mt-1.5" type="number" min="30" max="900" /></label>
+        <NodeConfigSection class="border-t border-[var(--border)] pt-4" :title="$t('designer.imageOutputSettings')" collapsible :default-expanded="false">
+          <div class="grid grid-cols-2 gap-3">
+            <FormField :label="$t('designer.imageQuality')" compact><Select v-model="config.quality"><option v-for="value in ['auto','low','medium','high']" :key="value" :value="value">{{ value }}</option></Select></FormField>
+            <FormField :label="$t('designer.imageFormat')" compact><Select v-model="config.output_format"><option v-for="value in ['webp','png','jpeg']" :key="value" :value="value">{{ value }}</option></Select></FormField>
+            <FormField :label="$t('designer.imageCompression')" compact><InputText v-model.number="config.output_compression" type="number" min="0" max="100" :disabled="pngOutput" /></FormField>
+            <FormField :label="$t('designer.imageBackground')" compact><Select v-model="config.background"><option v-for="value in ['auto','opaque','transparent']" :key="value" :value="value">{{ value }}</option></Select></FormField>
+            <FormField class="col-span-2" :label="$t('designer.imageTimeout')" compact><InputText v-model.number="config.timeout_seconds" type="number" min="30" max="900" /></FormField>
+          </div>
+        </NodeConfigSection>
       </div>
-    </details>
+    </NodeConfigSection>
+
+    <NodeConfigSection class="mt-5 border-t border-[var(--border)] pt-5" :title="$t('designer.inputVariables')" :hint="$t('designer.inputVariablesHint')" :count="'size' in config ? 3 : 2" kind="input" collapsible>
+      <div class="space-y-3">
+        <NodeSettingCard :title="$t('designer.imagePrompt')" type="String" required><VariableField v-model="config.prompt" :groups="variableGroups" multiline :rows="6" :placeholder="$t('designer.imagePromptPlaceholder')" /></NodeSettingCard>
+        <div class="grid grid-cols-2 gap-3">
+          <NodeSettingCard v-if="'size' in config" :title="$t('designer.imageSize')" type="String"><VariableField v-model="config.size" class="font-mono" :groups="variableGroups" placeholder="{{inputs.resolution}}" /></NodeSettingCard>
+          <NodeSettingCard :title="$t('designer.imageCount')" type="Number" :class="{ 'col-span-2': !('size' in config) }"><VariableField v-model="config.count" class="font-mono" :groups="variableGroups" placeholder="{{inputs.count}}" /></NodeSettingCard>
+        </div>
+      </div>
+    </NodeConfigSection>
   </section>
 </template>

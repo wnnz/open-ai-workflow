@@ -7,6 +7,10 @@ defineEmits<{ 'update:modelValue': [value: string] }>()
 
 <template>
   <InputText v-bind="$attrs" :model-value="modelValue" :placeholder="placeholder" :type="type" :required="required"
-    class="focus-ring h-10 w-full rounded-lg border border-[var(--border)] bg-[var(--input-bg)] px-3 text-sm text-[var(--text)] placeholder:text-[var(--muted)] read-only:bg-[var(--panel-subtle)] disabled:cursor-not-allowed disabled:bg-[var(--panel-subtle)] disabled:text-[var(--muted)] disabled:opacity-100"
+    class="app-input focus-ring w-full border border-[var(--border)] bg-[var(--input-bg)] px-3 text-[var(--text)] placeholder:text-[var(--muted)] read-only:bg-[var(--panel-subtle)] disabled:cursor-not-allowed disabled:bg-[var(--panel-subtle)] disabled:text-[var(--muted)] disabled:opacity-100"
     @update:model-value="$emit('update:modelValue', $event ?? '')" />
 </template>
+
+<style scoped>
+.app-input { height: var(--control-height, 2.5rem); border-radius: var(--control-radius, 0.5rem); font-size: var(--control-font-size, 0.875rem); }
+</style>

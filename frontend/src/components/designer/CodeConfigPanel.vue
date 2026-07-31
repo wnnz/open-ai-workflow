@@ -9,6 +9,7 @@ import InputText from '@/volt/InputText.vue'
 import Select from '@/volt/Select.vue'
 import ToggleSwitch from '@/volt/ToggleSwitch.vue'
 import NodeConfigSection from './NodeConfigSection.vue'
+import NodeSettingCard from './NodeSettingCard.vue'
 
 const props = defineProps<{ config: Record<string, any>; variableGroups: WorkflowVariableGroup[] }>()
 const emit = defineEmits<{ editing: [value: boolean] }>()
@@ -32,29 +33,28 @@ function addOutput() { props.config.outputs.push({ name: nextName('result', prop
 </script>
 
 <template>
-  <div data-testid="code-config-panel" class="mt-5 space-y-5">
-    <NodeConfigSection :title="t('designer.codeInputs')" :hint="t('designer.codeInputsHint')">
-      <template #actions><IconButton :label="t('designer.addCodeInput')" size="sm" @click="addInput"><Plus :size="14" /></IconButton></template>
-      <div class="space-y-2">
-        <div v-for="(input, index) in config.inputs" :key="index" class="grid grid-cols-[88px_78px_minmax(0,1fr)_28px] gap-2 rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)] p-2">
-          <InputText v-model="input.name" class="!h-9 font-mono !text-xs" placeholder="arg1" />
-          <Select v-model="input.type" class="!h-9 !px-2 !text-[10px]"><option v-for="type in ['String','Number','Boolean','Object','Array','Any']" :key="type" :value="type">{{ type }}</option></Select>
-          <VariableField v-model="input.value" class="min-w-0 font-mono" :groups="variableGroups" :placeholder="t('designer.selectUpstreamOutput')" />
-          <IconButton :label="t('designer.removeCodeInput')" tone="danger" size="sm" @click="config.inputs.splice(Number(index), 1)"><Trash2 :size="13" /></IconButton>
-        </div>
-        <button v-if="!config.inputs.length" type="button" class="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[var(--border)] py-4 text-xs text-[var(--muted)] hover:border-[var(--primary)] hover:text-[var(--primary)]" @click="addInput"><Plus :size="14" />{{ t('designer.addCodeInput') }}</button>
+  <div data-testid="code-config-panel" class="mt-5">
+    <NodeConfigSection :title="t('designer.nodeParameters')" :hint="t('designer.nodeParametersHint')" kind="parameters">
+      <div class="space-y-4">
+        <NodeConfigSection :title="t('designer.pythonCode')" :hint="t('designer.pythonCodeHint')"><CodeEditor v-model="config.source" language="python" height="360px" @focus="emit('editing', true)" @blur="emit('editing', false)" /></NodeConfigSection>
+
+        <NodeConfigSection class="border-t border-[var(--border)] pt-4" :title="t('designer.codeOutputs')" :hint="t('designer.codeOutputsHint')" :count="config.outputs.length">
+          <template #actions><IconButton :label="t('designer.addCodeOutput')" size="sm" @click="addOutput"><Plus :size="14" /></IconButton></template>
+          <div class="space-y-2"><NodeSettingCard v-for="(output, index) in config.outputs" :key="index"><div class="grid grid-cols-[minmax(0,1fr)_100px_28px] gap-2"><InputText v-model="output.name" class="font-mono" placeholder="result" /><Select v-model="output.type"><option v-for="type in ['String','Number','Boolean','Object','Array','File','Any']" :key="type" :value="type">{{ type }}</option></Select><IconButton :label="t('designer.removeCodeOutput')" tone="danger" size="sm" @click="config.outputs.splice(Number(index), 1)"><Trash2 :size="13" /></IconButton></div></NodeSettingCard></div>
+        </NodeConfigSection>
+
+        <NodeConfigSection class="border-t border-[var(--border)] pt-4" :title="t('designer.codeRuntime')" collapsible :default-expanded="false">
+          <div class="space-y-4"><label class="field-label">{{ t('designer.codeEntrypoint') }}<InputText v-model="config.entrypoint" class="mt-1.5 font-mono" /></label><div class="grid grid-cols-2 gap-3"><label class="field-label">{{ t('designer.timeoutSeconds') }}<InputText v-model.number="config.timeout_seconds" class="mt-1.5" type="number" min="1" max="300" /></label><label class="field-label">{{ t('designer.memoryMb') }}<InputText v-model.number="config.memory_mb" class="mt-1.5" type="number" min="64" max="2048" /></label></div><NodeSettingCard :title="t('designer.codeNetwork')" :hint="t('designer.codeNetworkHint')"><template #header><div class="flex min-w-0 flex-1 items-start gap-2"><ShieldCheck :size="16" class="mt-0.5 text-emerald-600" /><div><div class="text-xs font-semibold">{{ t('designer.codeNetwork') }}</div><p class="muted mt-1 text-[10px]">{{ t('designer.codeNetworkHint') }}</p></div></div></template><template #actions><ToggleSwitch v-model="config.network_enabled" :label="t('designer.codeNetwork')" /></template></NodeSettingCard></div>
+        </NodeConfigSection>
       </div>
     </NodeConfigSection>
 
-    <NodeConfigSection :title="t('designer.pythonCode')" :hint="t('designer.pythonCodeHint')">
-      <CodeEditor v-model="config.source" language="python" height="360px" @focus="emit('editing', true)" @blur="emit('editing', false)" />
+    <NodeConfigSection class="mt-5 border-t border-[var(--border)] pt-5" :title="t('designer.inputVariables')" :hint="t('designer.codeInputsHint')" :count="config.inputs.length" kind="input" collapsible>
+      <template #actions><IconButton :label="t('designer.addCodeInput')" size="sm" @click="addInput"><Plus :size="14" /></IconButton></template>
+      <div class="space-y-2">
+        <NodeSettingCard v-for="(input, index) in config.inputs" :key="index"><div class="grid grid-cols-[88px_78px_minmax(0,1fr)_28px] gap-2"><InputText v-model="input.name" class="font-mono" placeholder="arg1" /><Select v-model="input.type" class="!px-2 !text-[10px]"><option v-for="type in ['String','Number','Boolean','Object','Array','Any']" :key="type" :value="type">{{ type }}</option></Select><VariableField v-model="input.value" class="min-w-0 font-mono" :groups="variableGroups" :placeholder="t('designer.selectUpstreamOutput')" /><IconButton :label="t('designer.removeCodeInput')" tone="danger" size="sm" @click="config.inputs.splice(Number(index), 1)"><Trash2 :size="13" /></IconButton></div></NodeSettingCard>
+        <button v-if="!config.inputs.length" type="button" class="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[var(--border)] py-4 text-xs text-[var(--muted)] hover:border-[var(--primary)] hover:text-[var(--primary)]" @click="addInput"><Plus :size="14" />{{ t('designer.addCodeInput') }}</button>
+      </div>
     </NodeConfigSection>
-
-    <NodeConfigSection :title="t('designer.codeOutputs')" :hint="t('designer.codeOutputsHint')">
-      <template #actions><IconButton :label="t('designer.addCodeOutput')" size="sm" @click="addOutput"><Plus :size="14" /></IconButton></template>
-      <div class="space-y-2"><div v-for="(output, index) in config.outputs" :key="index" class="grid grid-cols-[minmax(0,1fr)_100px_28px] gap-2 rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)] p-2"><InputText v-model="output.name" class="!h-9 font-mono !text-xs" placeholder="result" /><Select v-model="output.type" class="!h-9 !text-xs"><option v-for="type in ['String','Number','Boolean','Object','Array','File','Any']" :key="type" :value="type">{{ type }}</option></Select><IconButton :label="t('designer.removeCodeOutput')" tone="danger" size="sm" @click="config.outputs.splice(Number(index), 1)"><Trash2 :size="13" /></IconButton></div></div>
-    </NodeConfigSection>
-
-    <details class="rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)]" open><summary class="cursor-pointer px-3 py-2.5 text-xs font-semibold">{{ t('designer.codeRuntime') }}</summary><div class="space-y-4 border-t border-[var(--border)] p-3"><label class="field-label">{{ t('designer.codeEntrypoint') }}<InputText v-model="config.entrypoint" class="mt-1.5 font-mono" /></label><div class="grid grid-cols-2 gap-3"><label class="field-label">{{ t('designer.timeoutSeconds') }}<InputText v-model.number="config.timeout_seconds" class="mt-1.5" type="number" min="1" max="300" /></label><label class="field-label">{{ t('designer.memoryMb') }}<InputText v-model.number="config.memory_mb" class="mt-1.5" type="number" min="64" max="2048" /></label></div><div class="flex items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3"><ShieldCheck :size="16" class="text-emerald-600" /><div class="min-w-0 flex-1"><div class="text-xs font-semibold">{{ t('designer.codeNetwork') }}</div><p class="muted mt-1 text-[10px]">{{ t('designer.codeNetworkHint') }}</p></div><ToggleSwitch v-model="config.network_enabled" :label="t('designer.codeNetwork')" /></div></div></details>
   </div>
 </template>

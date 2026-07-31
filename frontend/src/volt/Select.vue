@@ -214,7 +214,7 @@ defineExpose({ open: openMenu, close: closeMenu })
 </script>
 
 <template>
-  <div class="relative inline-flex h-10 w-full text-sm" :class="$attrs.class" @focusout="handleFocusOut">
+  <div class="app-select relative inline-flex w-full" :class="$attrs.class" @focusout="handleFocusOut">
     <select
       v-if="!editable"
       ref="nativeSelectElement"
@@ -237,7 +237,7 @@ defineExpose({ open: openMenu, close: closeMenu })
       :aria-activedescendant="activeIndex >= 0 ? `${menuId}-${activeIndex}` : undefined"
       :aria-required="required || undefined"
       :disabled="disabled"
-      class="focus-ring flex h-full w-full items-center rounded-lg border border-[var(--border)] bg-[var(--input-bg)] px-3 pr-10 text-left text-[var(--text)] hover:border-[color-mix(in_srgb,var(--primary),var(--border)_65%)] disabled:cursor-not-allowed disabled:bg-[var(--panel-subtle)] disabled:text-[var(--muted)] disabled:opacity-100"
+      class="app-select-control focus-ring flex h-full w-full items-center border border-[var(--border)] bg-[var(--input-bg)] px-3 pr-10 text-left text-[var(--text)] hover:border-[color-mix(in_srgb,var(--primary),var(--border)_65%)] disabled:cursor-not-allowed disabled:bg-[var(--panel-subtle)] disabled:text-[var(--muted)] disabled:opacity-100"
       :class="controlClass"
       @click="toggleMenu"
       @keydown="handleKeydown"
@@ -255,7 +255,7 @@ defineExpose({ open: openMenu, close: closeMenu })
       :aria-controls="menuId"
       :aria-expanded="open"
       :aria-activedescendant="activeIndex >= 0 ? `${menuId}-${activeIndex}` : undefined"
-      class="focus-ring h-10 w-full rounded-lg border border-[var(--border)] bg-[var(--input-bg)] px-3 pr-10 !text-sm text-[var(--text)] placeholder:text-[var(--muted)] disabled:cursor-not-allowed disabled:bg-[var(--panel-subtle)] disabled:text-[var(--muted)] disabled:opacity-100"
+      class="app-select-control focus-ring h-full w-full border border-[var(--border)] bg-[var(--input-bg)] px-3 pr-10 text-[var(--text)] placeholder:text-[var(--muted)] disabled:cursor-not-allowed disabled:bg-[var(--panel-subtle)] disabled:text-[var(--muted)] disabled:opacity-100"
       :class="controlClass"
       @focus="openOnFocus && openMenu()"
       @input="handleInput(($event.target as HTMLInputElement).value)"
@@ -294,3 +294,8 @@ defineExpose({ open: openMenu, close: closeMenu })
     </div>
   </div>
 </template>
+
+<style scoped>
+.app-select { height: var(--control-height, 2.5rem); font-size: var(--control-font-size, 0.875rem); }
+.app-select-control { border-radius: var(--control-radius, 0.5rem); font-size: inherit; }
+</style>

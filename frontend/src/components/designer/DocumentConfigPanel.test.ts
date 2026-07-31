@@ -29,5 +29,7 @@ describe('DocumentConfigPanel', () => {
     expect(wrapper.text()).toContain('来源文件或变量')
     expect(wrapper.text()).toContain('答案方案或变量')
     expect(wrapper.findAll('input.variable-control')).toHaveLength(2)
+    expect(wrapper.find('details').exists()).toBe(false)
+    expect(wrapper.findAll('[data-section-kind]').map(section => section.attributes('data-section-kind'))).toEqual(['parameters', 'input'])
   })
 })

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ShieldAlert } from 'lucide-vue-next'
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import FormField from '@/components/ui/FormField.vue'
@@ -36,29 +37,33 @@ function updateDefaultOutput() {
 </script>
 
 <template>
-  <div class="mt-5 space-y-4 border-t border-[var(--border)] pt-5">
-    <NodeConfigSection :title="t('designer.retryOnFailure')" :hint="t('designer.retryOnFailureHint')" collapsible>
-      <template #actions><ToggleSwitch v-model="config.retry.enabled" :label="t('designer.retryOnFailure')" /></template>
-      <div v-if="config.retry.enabled" class="grid grid-cols-2 gap-2 rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)] p-3">
-        <FormField :label="t('designer.maxRetries')" compact><InputText v-model.number="config.retry.max_retries" type="number" min="1" max="10" /></FormField>
-        <FormField :label="t('designer.retryInterval')" compact><InputText v-model.number="config.retry.interval_seconds" type="number" min="0" max="30" step="0.5" /></FormField>
-      </div>
-      <p v-else class="muted rounded-lg bg-[var(--panel-subtle)] p-3 text-[11px]">{{ t('designer.retryDisabledHint') }}</p>
-    </NodeConfigSection>
+  <NodeConfigSection class="mt-5 border-t border-[var(--border)] pt-5" :title="t('designer.executionPolicy')" :hint="t('designer.executionPolicyHint')" kind="policy" collapsible :default-expanded="false">
+    <template #icon><ShieldAlert :size="14" /></template>
+    <div class="space-y-3">
+      <section class="rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)] p-3">
+        <div class="flex items-start gap-3"><div class="min-w-0 flex-1"><h4 class="text-[11px] font-semibold">{{ t('designer.retryOnFailure') }}</h4><p class="muted mt-1 text-[10px] leading-4">{{ t('designer.retryOnFailureHint') }}</p></div><ToggleSwitch v-model="config.retry.enabled" :label="t('designer.retryOnFailure')" /></div>
+        <div v-if="config.retry.enabled" class="mt-3 grid grid-cols-2 gap-2 border-t border-[var(--border)] pt-3">
+          <FormField :label="t('designer.maxRetries')" compact><InputText v-model.number="config.retry.max_retries" type="number" min="1" max="10" /></FormField>
+          <FormField :label="t('designer.retryInterval')" compact><InputText v-model.number="config.retry.interval_seconds" type="number" min="0" max="30" step="0.5" /></FormField>
+        </div>
+        <p v-else class="muted mt-2 text-[10px] leading-4">{{ t('designer.retryDisabledHint') }}</p>
+      </section>
 
-    <NodeConfigSection class="border-t border-[var(--border)] pt-4" :title="t('designer.errorHandling')" :hint="t('designer.errorHandlingHint')" collapsible>
-      <FormField :label="t('designer.errorStrategy')" compact>
-        <Select v-model="config.error_strategy" class="!h-9 !text-xs">
-          <option value="fail">{{ t('designer.errorStrategies.fail') }}</option>
-          <option value="default_value">{{ t('designer.errorStrategies.default_value') }}</option>
-          <option value="error_branch">{{ t('designer.errorStrategies.error_branch') }}</option>
-        </Select>
-      </FormField>
-      <JsonEditorField v-if="config.error_strategy === 'default_value'" v-model="defaultOutputText" class="mt-3" :label="t('designer.defaultOutput')" :error="defaultOutputError" height-class="h-28" @input="updateDefaultOutput" />
-      <div v-else-if="config.error_strategy === 'error_branch'" class="mt-3">
-        <p class="muted mb-2 text-[11px] leading-4">{{ t('designer.errorBranchHint') }}</p>
-        <BranchButton :label="t('designer.connectErrorBranch')" tone="warning" @click="emit('connect-error')" />
-      </div>
-    </NodeConfigSection>
-  </div>
+      <section class="rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)] p-3">
+        <h4 class="text-[11px] font-semibold">{{ t('designer.errorHandling') }}</h4><p class="muted mt-1 text-[10px] leading-4">{{ t('designer.errorHandlingHint') }}</p>
+        <FormField class="mt-3" :label="t('designer.errorStrategy')" compact>
+          <Select v-model="config.error_strategy" class="!h-9 !text-xs">
+            <option value="fail">{{ t('designer.errorStrategies.fail') }}</option>
+            <option value="default_value">{{ t('designer.errorStrategies.default_value') }}</option>
+            <option value="error_branch">{{ t('designer.errorStrategies.error_branch') }}</option>
+          </Select>
+        </FormField>
+        <JsonEditorField v-if="config.error_strategy === 'default_value'" v-model="defaultOutputText" class="mt-3" :label="t('designer.defaultOutput')" :error="defaultOutputError" height-class="h-28" @input="updateDefaultOutput" />
+        <div v-else-if="config.error_strategy === 'error_branch'" class="mt-3">
+          <p class="muted mb-2 text-[11px] leading-4">{{ t('designer.errorBranchHint') }}</p>
+          <BranchButton :label="t('designer.connectErrorBranch')" tone="warning" @click="emit('connect-error')" />
+        </div>
+      </section>
+    </div>
+  </NodeConfigSection>
 </template>

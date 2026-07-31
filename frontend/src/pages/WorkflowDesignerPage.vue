@@ -13,6 +13,7 @@ import AnnotationPlacementToolbar from '@/components/designer/AnnotationPlacemen
 import DesignerCommandPalette from '@/components/designer/DesignerCommandPalette.vue'
 import NextStepPanel from '@/components/designer/NextStepPanel.vue'
 import NodeActionMenu, { type NodeAction } from '@/components/designer/NodeActionMenu.vue'
+import NodeConfigSection from '@/components/designer/NodeConfigSection.vue'
 import NodeOutputPanel from '@/components/designer/NodeOutputPanel.vue'
 import NodePalette from '@/components/designer/NodePalette.vue'
 import PublishPopover from '@/components/designer/PublishPopover.vue'
@@ -1243,17 +1244,23 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
 
         <WorkflowCommentsPanel v-if="showComments" :comments="comments" :selected-id="selectedCommentId" :placement-active="commentMode" @close="closeComments" @select="selectComment" @place="toggleCommentMode" @submit="submitComment" @toggle-resolved="toggleCommentResolved" @delete="deleteCommentThread" />
 
-        <WorkflowNodeInspector v-else-if="selected" v-model:tab="inspectorTab" :node="selected" :node-type="selectedType" :running="running" :result="selectedResult" :name-error="nodeNameError" @update:label="updateSelectedNodeLabel" @update:description="selected.data.description = $event" @run="openRunDialog(selected.id)" @help="showHelp = true" @close="clearNodeSelection">
-          <template #settings>
-              <label v-if="selectedType === 'note'" class="field-label">{{ t('designer.noteContent') }}<MarkdownComposer v-model="selected.data.description" class="mt-1.5" :placeholder="t('designer.noteEmpty')" :rows="6" /></label>
-              <template v-if="selectedType === 'note'">
-                <div class="mt-5"><h3 class="text-xs font-semibold">{{ t('designer.noteColor') }}</h3><div class="mt-2 flex gap-2"><button v-for="color in ['yellow','blue','green','rose']" :key="color" class="note-color-swatch" :class="[`swatch-${color}`, { active: selected.data.color === color }]" :aria-label="t(`designer.noteColors.${color}`)" @click="selected.data.color = color"><Check v-if="selected.data.color === color" :size="12" /></button></div></div>
-              </template>
-              <template v-else-if="selectedType === 'start'">
-                <div class="mt-5"><h3 class="text-xs font-semibold">{{ t('designer.triggerMethods') }}</h3><p class="muted mt-1 text-[11px]">{{ t('designer.triggerMethodHint') }}</p><div class="mt-2 grid grid-cols-2 gap-2" role="radiogroup"><button v-for="trigger in ['form','api','webhook','schedule']" :key="trigger" type="button" role="radio" :aria-checked="hasStartTrigger(trigger)" class="flex h-10 items-center gap-2 rounded-lg border px-3 text-left text-xs" :class="hasStartTrigger(trigger) ? 'border-[var(--primary)] bg-[var(--primary-soft)] text-[var(--primary)]' : 'border-[var(--border)]'" @click="toggleStartTrigger(trigger)"><span class="flex h-4 w-4 items-center justify-center rounded-full border" :class="hasStartTrigger(trigger) ? 'border-[var(--primary)]' : 'border-[var(--border)]'"><span v-if="hasStartTrigger(trigger)" class="h-2 w-2 rounded-full bg-[var(--primary)]"></span></span>{{ t(`designer.triggers.${trigger}`) }}</button></div></div>
-                <div class="mt-5 flex items-center justify-between"><div><h3 class="text-xs font-semibold">{{ t('designer.userInputs') }}</h3><p class="muted mt-1 text-[11px]">{{ t('designer.userInputsHint') }}</p></div><button class="icon-button" :title="t('designer.addInputField')" :aria-label="t('designer.addInputField')" @click="addStartInput"><Plus :size="14" /></button></div>
-                <div class="mt-3 space-y-2">
-                  <div v-for="(field, index) in selected.data.config.input_fields" :key="index" class="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)]">
+	        <WorkflowNodeInspector v-else-if="selected" v-model:tab="inspectorTab" :node="selected" :node-type="selectedType" :running="running" :result="selectedResult" :name-error="nodeNameError" @update:label="updateSelectedNodeLabel" @update:description="selected.data.description = $event" @run="openRunDialog(selected.id)" @help="showHelp = true" @close="clearNodeSelection">
+	          <template #settings>
+	              <NodeConfigSection v-if="selectedType === 'note'" class="mt-5" :title="t('designer.nodeParameters')" :hint="t('designer.nodeParametersHint')" kind="parameters">
+	                <label class="field-label">{{ t('designer.noteContent') }}<MarkdownComposer v-model="selected.data.description" class="mt-1.5" :placeholder="t('designer.noteEmpty')" :rows="6" /></label>
+	                <NodeConfigSection class="mt-4 border-t border-[var(--border)] pt-4" :title="t('designer.noteColor')"><div class="flex gap-2"><button v-for="color in ['yellow','blue','green','rose']" :key="color" class="note-color-swatch" :class="[`swatch-${color}`, { active: selected.data.color === color }]" :aria-label="t(`designer.noteColors.${color}`)" @click="selected.data.color = color"><Check v-if="selected.data.color === color" :size="12" /></button></div></NodeConfigSection>
+	              </NodeConfigSection>
+	              <template v-else-if="selectedType === 'start'">
+	                <NodeConfigSection class="mt-5" :title="t('designer.nodeParameters')" :hint="t('designer.nodeParametersHint')" kind="parameters">
+	                  <NodeConfigSection :title="t('designer.triggerMethods')" :hint="t('designer.triggerMethodHint')"><div class="grid grid-cols-2 gap-2" role="radiogroup"><button v-for="trigger in ['form','api','webhook','schedule']" :key="trigger" type="button" role="radio" :aria-checked="hasStartTrigger(trigger)" class="flex h-10 items-center gap-2 rounded-lg border px-3 text-left text-xs" :class="hasStartTrigger(trigger) ? 'border-[var(--primary)] bg-[var(--primary-soft)] text-[var(--primary)]' : 'border-[var(--border)]'" @click="toggleStartTrigger(trigger)"><span class="flex h-4 w-4 items-center justify-center rounded-full border" :class="hasStartTrigger(trigger) ? 'border-[var(--primary)]' : 'border-[var(--border)]'"><span v-if="hasStartTrigger(trigger)" class="h-2 w-2 rounded-full bg-[var(--primary)]"></span></span>{{ t(`designer.triggers.${trigger}`) }}</button></div></NodeConfigSection>
+	                  <NodeConfigSection v-if="hasStartTrigger('schedule')" class="mt-4 border-t border-[var(--border)] pt-4" :title="t('designer.schedule')"><template #actions><label class="flex items-center gap-2 text-[10px]"><input v-model="selected.data.config.schedule.enabled" class="accent-[var(--primary)]" type="checkbox">{{ t('designer.enabled') }}</label></template><div class="space-y-3"><label class="field-label">Cron<InputText v-model="selected.data.config.schedule.cron" class="mt-1.5 font-mono" placeholder="0 9 * * *" /></label><label class="field-label">{{ t('settings.timezone') }}<InputText v-model="selected.data.config.schedule.timezone" class="mt-1.5" placeholder="Asia/Singapore" /></label><label class="field-label">{{ t('designer.scheduleInputs') }}<Textarea v-model="selected.data.config.schedule.inputs_json" class="mt-1.5 h-24 font-mono" placeholder='{"message":"Daily report"}' /></label></div></NodeConfigSection>
+	                  <div v-if="hasStartTrigger('api') || hasStartTrigger('webhook')" class="mt-4 rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)] p-3 text-[11px]"><div class="font-semibold">{{ t('designer.endpointAfterPublish') }}</div><code v-if="hasStartTrigger('api')" class="muted mt-2 block break-all">POST {{ origin }}/v1/apps/{{ workflow?.slug }}/run</code><code v-if="hasStartTrigger('webhook')" class="muted mt-2 block break-all">POST {{ origin }}/v1/apps/{{ workflow?.slug }}/webhook</code><code class="muted mt-2 block break-all">POST {{ origin }}/v1/apps/{{ workflow?.slug }}/files</code></div>
+	                </NodeConfigSection>
+
+	                <NodeConfigSection class="mt-5 border-t border-[var(--border)] pt-5" :title="t('designer.inputVariables')" :hint="t('designer.userInputsHint')" :count="selected.data.config.input_fields.length" kind="input" collapsible>
+	                  <template #actions><button class="icon-button" :title="t('designer.addInputField')" :aria-label="t('designer.addInputField')" @click="addStartInput"><Plus :size="14" /></button></template>
+	                  <div class="space-y-2">
+	                  <div v-for="(field, index) in selected.data.config.input_fields" :key="index" class="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)]">
                     <div class="flex items-center gap-1 p-2 transition-colors hover:bg-[var(--primary-soft)]">
                       <button type="button" class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left" @click="toggleStartField(index)">
                         <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--primary-soft)] text-[10px] font-semibold text-[var(--primary)]">{{ field.type === 'files' ? '[]' : field.type === 'file' ? 'F' : field.type === 'number' ? '#' : field.type === 'select' ? '⌄' : 'T' }}</span>
@@ -1264,41 +1271,39 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
                       <button class="icon-button text-red-600" :aria-label="t('designer.removeInputField')" @click="removeStartInput(index)"><Trash2 :size="13" /></button>
                     </div>
                     <div v-if="expandedStartFieldIndex === Number(index)" class="border-t border-[var(--border)] bg-[var(--panel)] p-3">
-                      <label class="field-label">{{ t('designer.fieldLabel') }}<InputText v-model="field.label" class="mt-1.5 !h-8" /></label>
-                      <div class="mt-3 grid grid-cols-[minmax(0,1fr)_125px] gap-2"><label class="field-label">{{ t('designer.variableName') }}<InputText v-model="field.name" class="mt-1.5 !h-8 font-mono" placeholder="field_name" /></label><label class="field-label">{{ t('designer.fieldType') }}<Select v-model="field.type" class="mt-1.5 !h-8 !text-xs"><option v-for="kind in ['text','textarea','number','select','file','files']" :key="kind" :value="kind">{{ t(`designer.fieldTypes.${kind}`) }}</option></Select></label></div>
-                      <template v-if="['text','textarea','select'].includes(field.type)">
-                        <label class="field-label mt-3">{{ t('designer.placeholder') }}<InputText v-model="field.placeholder" class="mt-1.5 !h-8" /></label>
-                        <label class="field-label mt-3">{{ t('designer.defaultValue') }}<InputText v-model="field.default_value" class="mt-1.5 !h-8" /></label>
-                        <label v-if="field.type !== 'select'" class="field-label mt-3">{{ t('designer.maxLength') }}<InputText v-model.number="field.max_length" type="number" min="1" max="100000" class="mt-1.5 !h-8" /></label>
-                      </template>
-                      <template v-if="field.type === 'number'"><div class="mt-3 grid grid-cols-3 gap-2"><label class="field-label">{{ t('designer.defaultValue') }}<InputText v-model.number="field.default_value" type="number" class="mt-1.5 !h-8" /></label><label class="field-label">{{ t('designer.minimum') }}<InputText v-model.number="field.min" type="number" class="mt-1.5 !h-8" /></label><label class="field-label">{{ t('designer.maximum') }}<InputText v-model.number="field.max" type="number" class="mt-1.5 !h-8" /></label></div></template>
-                      <div v-if="field.type === 'select'" class="mt-3"><div class="flex items-center"><h4 class="text-[11px] font-semibold">{{ t('designer.options') }}</h4><button class="icon-button ml-auto" :aria-label="t('designer.addOption')" @click="addStartFieldOption(field)"><Plus :size="13" /></button></div><div class="mt-2 space-y-2"><div v-for="(_, optionIndex) in field.options" :key="optionIndex" class="flex gap-2"><InputText v-model="field.options[optionIndex]" class="!h-8" /><button class="icon-button text-red-600" :aria-label="t('designer.removeOption')" @click="removeStartFieldOption(field, optionIndex)"><X :size="13" /></button></div><button v-if="!field.options.length" class="w-full rounded-md border border-dashed border-[var(--border)] py-3 text-[11px] text-[var(--muted)] hover:border-[var(--primary)] hover:text-[var(--primary)]" @click="addStartFieldOption(field)"><Plus class="mr-1 inline" :size="12" />{{ t('designer.addOption') }}</button></div></div>
+	                      <label class="field-label">{{ t('designer.fieldLabel') }}<InputText v-model="field.label" class="mt-1.5" /></label>
+	                      <div class="mt-3 grid grid-cols-[minmax(0,1fr)_125px] gap-2"><label class="field-label">{{ t('designer.variableName') }}<InputText v-model="field.name" class="mt-1.5 font-mono" placeholder="field_name" /></label><label class="field-label">{{ t('designer.fieldType') }}<Select v-model="field.type" class="mt-1.5"><option v-for="kind in ['text','textarea','number','select','file','files']" :key="kind" :value="kind">{{ t(`designer.fieldTypes.${kind}`) }}</option></Select></label></div>
+	                      <template v-if="['text','textarea','select'].includes(field.type)">
+	                        <label class="field-label mt-3">{{ t('designer.placeholder') }}<InputText v-model="field.placeholder" class="mt-1.5" /></label>
+	                        <label class="field-label mt-3">{{ t('designer.defaultValue') }}<InputText v-model="field.default_value" class="mt-1.5" /></label>
+	                        <label v-if="field.type !== 'select'" class="field-label mt-3">{{ t('designer.maxLength') }}<InputText v-model.number="field.max_length" type="number" min="1" max="100000" class="mt-1.5" /></label>
+	                      </template>
+	                      <template v-if="field.type === 'number'"><div class="mt-3 grid grid-cols-3 gap-2"><label class="field-label">{{ t('designer.defaultValue') }}<InputText v-model.number="field.default_value" type="number" class="mt-1.5" /></label><label class="field-label">{{ t('designer.minimum') }}<InputText v-model.number="field.min" type="number" class="mt-1.5" /></label><label class="field-label">{{ t('designer.maximum') }}<InputText v-model.number="field.max" type="number" class="mt-1.5" /></label></div></template>
+	                      <div v-if="field.type === 'select'" class="mt-3"><div class="flex items-center"><h4 class="text-[11px] font-semibold">{{ t('designer.options') }}</h4><button class="icon-button ml-auto" :aria-label="t('designer.addOption')" @click="addStartFieldOption(field)"><Plus :size="13" /></button></div><div class="mt-2 space-y-2"><div v-for="(_, optionIndex) in field.options" :key="optionIndex" class="flex gap-2"><InputText v-model="field.options[optionIndex]" /><button class="icon-button text-red-600" :aria-label="t('designer.removeOption')" @click="removeStartFieldOption(field, optionIndex)"><X :size="13" /></button></div><button v-if="!field.options.length" class="w-full rounded-md border border-dashed border-[var(--border)] py-3 text-[11px] text-[var(--muted)] hover:border-[var(--primary)] hover:text-[var(--primary)]" @click="addStartFieldOption(field)"><Plus class="mr-1 inline" :size="12" />{{ t('designer.addOption') }}</button></div></div>
                       <label class="mt-3 flex items-center gap-2 text-xs"><input v-model="field.required" type="checkbox">{{ t('designer.required') }}</label>
                     </div>
                   </div>
-                </div>
-                <div v-if="hasStartTrigger('schedule')" class="mt-5 rounded-lg border border-[var(--border)] p-3"><div class="flex items-center justify-between"><h3 class="text-xs font-semibold">{{ t('designer.schedule') }}</h3><label class="flex items-center gap-2 text-xs"><input v-model="selected.data.config.schedule.enabled" type="checkbox">{{ t('designer.enabled') }}</label></div><label class="field-label mt-3">Cron<InputText v-model="selected.data.config.schedule.cron" class="mt-1.5 font-mono" placeholder="0 9 * * *" /></label><label class="field-label mt-3">{{ t('settings.timezone') }}<InputText v-model="selected.data.config.schedule.timezone" class="mt-1.5" placeholder="Asia/Singapore" /></label><label class="field-label mt-3">{{ t('designer.scheduleInputs') }}<Textarea v-model="selected.data.config.schedule.inputs_json" class="mt-1.5 h-24 font-mono !text-xs" placeholder='{"message":"Daily report"}' /></label></div>
-                <div v-if="hasStartTrigger('api') || hasStartTrigger('webhook')" class="mt-5 rounded-lg bg-[var(--panel-subtle)] p-3 text-[11px]"><div class="font-semibold">{{ t('designer.endpointAfterPublish') }}</div><code v-if="hasStartTrigger('api')" class="muted mt-2 block break-all">POST {{ origin }}/v1/apps/{{ workflow?.slug }}/run</code><code v-if="hasStartTrigger('webhook')" class="muted mt-2 block break-all">POST {{ origin }}/v1/apps/{{ workflow?.slug }}/webhook</code><code class="muted mt-2 block break-all">POST {{ origin }}/v1/apps/{{ workflow?.slug }}/files</code></div>
-              </template>
-              <template v-else-if="selectedType === 'end'">
-                <div class="mt-5 flex items-center justify-between">
-                  <div><h3 class="text-xs font-semibold">{{ t('designer.outputFields') }}</h3><p class="muted mt-1 text-[11px]">{{ t('designer.outputFieldsHint') }}</p></div>
-                  <button class="icon-button" :title="t('designer.addOutputField')" @click="addEndOutput"><Plus :size="14" /></button>
-                </div>
-                <div class="mt-3 space-y-3">
-                  <div v-for="(output, index) in selected.data.config.outputs" :key="index" class="rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)] p-3">
-                    <div class="grid grid-cols-[minmax(0,1fr)_105px_30px] gap-2">
-                      <InputText v-model="output.name" class="!h-8 font-mono" :placeholder="t('designer.outputName')" />
-                      <Select v-model="output.type" class="!h-8 !w-28 !text-xs">
+	                  </div>
+	                </NodeConfigSection>
+	              </template>
+	              <template v-else-if="selectedType === 'end'">
+	                <NodeConfigSection class="mt-5" :title="t('designer.outputFields')" :hint="t('designer.outputFieldsHint')" :count="selected.data.config.outputs.length" kind="output">
+	                  <template #actions><button class="icon-button" :title="t('designer.addOutputField')" :aria-label="t('designer.addOutputField')" @click="addEndOutput"><Plus :size="14" /></button></template>
+	                  <div class="space-y-3">
+	                  <div v-for="(output, index) in selected.data.config.outputs" :key="index" class="rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)] p-3">
+	                    <div class="grid grid-cols-[minmax(0,1fr)_105px_30px] gap-2">
+	                      <InputText v-model="output.name" class="font-mono" :placeholder="t('designer.outputName')" />
+	                      <Select v-model="output.type" class="!w-28">
                         <option v-for="kind in ['String','Number','Boolean','Object','Array','File','Any']" :key="kind" :value="kind">{{ kind }}</option>
                       </Select>
-                      <button class="icon-button !h-8 !w-8 text-red-600" :aria-label="t('designer.removeOutputField')" @click="removeEndOutput(index)"><X :size="14" /></button>
+	                      <button class="icon-button !h-9 !w-9 text-red-600" :aria-label="t('designer.removeOutputField')" @click="removeEndOutput(index)"><X :size="14" /></button>
                     </div>
                     <label class="field-label mt-3">{{ t('designer.outputValue') }}<VariableField v-model="output.value" class="mt-1.5 font-mono" :groups="variableGroups" :placeholder="t('designer.selectUpstreamOutput')" /></label>
                   </div>
                   <button v-if="!selected.data.config.outputs.length" class="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[var(--border)] py-5 text-xs text-[var(--muted)] hover:border-[var(--primary)] hover:text-[var(--primary)]" @click="addEndOutput"><Plus :size="14" />{{ t('designer.addOutputField') }}</button>
-                </div>
-              </template>
+	                  </div>
+	                </NodeConfigSection>
+	              </template>
               <template v-else>
                 <LlmConfigPanel v-if="selectedType === 'llm'" :config="selected.data.config" :providers="modelProviders" :variable-groups="variableGroups" :buffers="configBuffers" :errors="configFieldErrors" @structured="updateStructuredField($event.field, $event.buffer as any)" @editing="configEditing = $event" />
                 <ImageGenerationConfigPanel v-else-if="selectedType === 'image'" :config="selected.data.config" :providers="modelProviders" :variable-groups="variableGroups" />
@@ -1308,9 +1313,9 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
                 <ScriptConfigPanel v-else-if="selectedType === 'script'" :config="selected.data.config" :scripts="scripts" :workspace-id="workspaceId" :variable-groups="variableGroups" />
                 <HttpConfigPanel v-else-if="selectedType === 'http'" :config="selected.data.config" :variable-groups="variableGroups" :buffers="configBuffers" :errors="configFieldErrors" @structured="updateStructuredField" />
                 <TemplateConfigPanel v-else-if="selectedType === 'template'" :config="selected.data.config" :variable-groups="variableGroups" />
-                <DocumentConfigPanel v-else-if="selectedType === 'document'" :config="selected.data.config" :variable-groups="variableGroups" />
+                <DocumentConfigPanel v-else-if="selectedType === 'document'" :key="selected.id" :config="selected.data.config" :variable-groups="variableGroups" />
                 <VariableAssignConfigPanel v-else-if="selectedType === 'variable'" :key="selected.id" :config="selected.data.config" :variable-groups="variableGroups" />
-                <JsonEditorField v-else-if="selectedType === 'json'" v-model="configBuffers.jsonValue" class="mt-5" :label="t('designer.jsonValue')" :error="configFieldErrors.jsonValue" :groups="variableGroups" height-class="h-52" @input="updateStructuredField('value', 'jsonValue')" />
+	                <NodeConfigSection v-else-if="selectedType === 'json'" class="mt-5" :title="t('designer.nodeParameters')" :hint="t('designer.nodeParametersHint')" kind="parameters"><JsonEditorField v-model="configBuffers.jsonValue" :label="t('designer.jsonValue')" :error="configFieldErrors.jsonValue" :groups="variableGroups" height-class="h-52" @input="updateStructuredField('value', 'jsonValue')" /></NodeConfigSection>
                 <AggregateConfigPanel v-else-if="selectedType === 'aggregate'" :config="selected.data.config" :variable-groups="variableGroups" />
                 <ParameterExtractorConfigPanel v-else-if="selectedType === 'extract'" :key="selected.id" :config="selected.data.config" :providers="modelProviders" :variable-groups="variableGroups" />
                 <ListOperatorConfigPanel v-else-if="selectedType === 'list'" :key="selected.id" :config="selected.data.config" :variable-groups="variableGroups" />
@@ -1320,12 +1325,15 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
                 <LoopConfigPanel v-else-if="selectedType === 'loop'" :config="selected.data.config" :variable-groups="variableGroups" />
                 <WaitConfigPanel v-else-if="selectedType === 'wait'" :config="selected.data.config" />
                 <SubworkflowConfigPanel v-else-if="selectedType === 'subworkflow'" :config="selected.data.config" :workflows="subworkflows" :variable-groups="variableGroups" @select="selectSubworkflow" />
-                <section v-else-if="selectedType === 'delay'" class="mt-5"><label class="field-label">{{ t('designer.delaySeconds') }}<InputText v-model.number="selected.data.config.seconds" class="mt-1.5" type="number" min="1" max="86400" /></label></section>
-                <NodeOutputPanel :node="selected" :copied-path="copiedVariablePath" @copy="copyVariableReference" />
-                <ExecutionPolicyPanel v-if="executionPolicyNodeTypes.has(selectedType)" :config="selected.data.config" @connect-error="openPaletteForSource(selected.id, 'error')" />
-                <details class="mt-5 rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)] p-3" open @toggle="syncConfigEditor"><summary class="cursor-pointer text-xs font-semibold">{{ t('designer.advancedConfig') }}</summary><JsonEditorField v-model="configText" class="mt-3" :label="t('workflow.configuration')" :error="configError" :groups="variableGroups" height-class="h-48" @focus="configEditing = true" @blur="configEditing = false; syncConfigEditor()" @input="updateSelectedConfig" /></details>
+	                <NodeConfigSection v-else-if="selectedType === 'delay'" class="mt-5" :title="t('designer.nodeParameters')" :hint="t('designer.nodeParametersHint')" kind="parameters"><label class="field-label">{{ t('designer.delaySeconds') }}<InputText v-model.number="selected.data.config.seconds" class="mt-1.5" type="number" min="1" max="86400" /></label></NodeConfigSection>
               </template>
-            <NextStepPanel v-if="!['end','note','condition','classifier','human'].includes(selectedType)" :nodes="nextNodes" @add="openPaletteForSource(selected.id)" @parallel="openPaletteForSource(selected.id)" />
+            <NodeOutputPanel v-if="!['note','start','end'].includes(selectedType)" :key="`${selected.id}:output`" :node="selected" :copied-path="copiedVariablePath" @copy="copyVariableReference" />
+            <NextStepPanel v-if="!['end','note','condition','classifier','human'].includes(selectedType)" :key="`${selected.id}:next`" :nodes="nextNodes" @add="openPaletteForSource(selected.id)" @parallel="openPaletteForSource(selected.id)" />
+            <ExecutionPolicyPanel v-if="executionPolicyNodeTypes.has(selectedType)" :key="`${selected.id}:policy`" :config="selected.data.config" @connect-error="openPaletteForSource(selected.id, 'error')" />
+            <NodeConfigSection v-if="!['note','start','end'].includes(selectedType)" :key="`${selected.id}:advanced`" class="mt-5 border-t border-[var(--border)] pt-5" :title="t('designer.advancedConfig')" :hint="t('designer.advancedConfigHint')" kind="advanced" collapsible :default-expanded="false" @toggle="syncConfigEditor">
+              <template #icon><Braces :size="15" /></template>
+              <JsonEditorField v-model="configText" :label="t('workflow.configuration')" :error="configError" :groups="variableGroups" height-class="h-48" @focus="configEditing = true" @blur="configEditing = false; syncConfigEditor()" @input="updateSelectedConfig" />
+            </NodeConfigSection>
           </template>
         </WorkflowNodeInspector>
       </div>

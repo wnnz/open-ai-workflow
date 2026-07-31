@@ -2,7 +2,10 @@
 import { computed } from 'vue'
 import { GitBranch, LockKeyhole } from 'lucide-vue-next'
 import VariableField from '@/components/VariableField.vue'
+import FormField from '@/components/ui/FormField.vue'
 import Select from '@/volt/Select.vue'
+import NodeConfigSection from './NodeConfigSection.vue'
+import NodeSettingCard from './NodeSettingCard.vue'
 
 const props = defineProps<{
   config: Record<string, any>
@@ -29,31 +32,18 @@ function selectTarget() {
 </script>
 
 <template>
-  <section class="mt-5 space-y-5">
-    <label class="field-label">
-      {{ $t('designer.targetWorkflow') }}
-      <Select v-model="config.workflow_id" class="mt-1.5 !h-9 !text-xs" @change="selectTarget">
-        <option value="">{{ $t('designer.selectWorkflow') }}</option>
-        <option v-for="item in workflows" :key="item.id" :value="item.id">{{ item.name }}</option>
-      </Select>
-    </label>
-    <p v-if="!workflows.length" class="resource-empty">{{ $t('designer.noSubworkflows') }}</p>
-
-    <div v-if="target" class="rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)] p-3">
-      <div class="flex items-center gap-2 text-xs font-semibold"><GitBranch :size="14" class="text-emerald-600" />{{ target.name }}</div>
-      <div class="muted mt-2 flex items-center gap-1.5 text-[10px]"><LockKeyhole :size="11" />{{ target.published_version_id ? $t('designer.subworkflowPublishedPin') : $t('designer.subworkflowDraftOnly') }}</div>
-    </div>
-
-    <div v-if="target">
-      <h3 class="text-xs font-semibold">{{ $t('designer.inputMapping') }}</h3>
-      <p class="muted mt-1 text-[11px]">{{ $t('designer.inputMappingHint') }}</p>
-      <div v-if="inputFields.length" class="mt-3 space-y-3">
-        <label v-for="field in inputFields" :key="field.name" class="field-label">
-          <span class="flex items-center gap-1">{{ field.label || field.name }}<code class="muted text-[9px]">{{ field.name }}</code><span v-if="field.required" class="text-red-500">*</span></span>
-          <VariableField v-model="config.inputs[field.name]" class="mt-1.5" :groups="variableGroups" :placeholder="$t('designer.variableReferencePlaceholder')" />
-        </label>
+  <section class="mt-5">
+    <NodeConfigSection :title="$t('designer.nodeParameters')" :hint="$t('designer.nodeParametersHint')" kind="parameters">
+      <div class="space-y-4">
+        <FormField :label="$t('designer.targetWorkflow')" required compact><Select v-model="config.workflow_id" @change="selectTarget"><option value="">{{ $t('designer.selectWorkflow') }}</option><option v-for="item in workflows" :key="item.id" :value="item.id">{{ item.name }}</option></Select></FormField>
+        <p v-if="!workflows.length" class="resource-empty">{{ $t('designer.noSubworkflows') }}</p>
+        <NodeSettingCard v-if="target"><div class="flex items-center gap-2 text-xs font-semibold"><GitBranch :size="14" class="text-emerald-600" />{{ target.name }}</div><div class="muted mt-2 flex items-center gap-1.5 text-[10px]"><LockKeyhole :size="11" />{{ target.published_version_id ? $t('designer.subworkflowPublishedPin') : $t('designer.subworkflowDraftOnly') }}</div></NodeSettingCard>
       </div>
-      <p v-else class="resource-empty mt-3">{{ $t('designer.noWorkflowInputs') }}</p>
-    </div>
+    </NodeConfigSection>
+
+    <NodeConfigSection v-if="target" class="mt-5 border-t border-[var(--border)] pt-5" :title="$t('designer.inputVariables')" :hint="$t('designer.inputMappingHint')" :count="inputFields.length" kind="input" collapsible>
+      <div v-if="inputFields.length" class="space-y-3"><NodeSettingCard v-for="field in inputFields" :key="field.name" :title="field.label || field.name" :type="field.type || 'Any'" :required="field.required"><VariableField v-model="config.inputs[field.name]" :groups="variableGroups" :placeholder="$t('designer.variableReferencePlaceholder')" /></NodeSettingCard></div>
+      <p v-else class="resource-empty">{{ $t('designer.noWorkflowInputs') }}</p>
+    </NodeConfigSection>
   </section>
 </template>

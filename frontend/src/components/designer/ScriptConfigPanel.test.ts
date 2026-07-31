@@ -30,6 +30,9 @@ describe('ScriptConfigPanel', () => {
 
     expect(config.inputs).toHaveProperty('text', '')
     expect(wrapper.text()).toContain('Text to process')
+    const outputSection = wrapper.findAll('[data-section-kind="default"]').find(section => section.text().includes('输出'))
+    expect(outputSection).toBeTruthy()
+    await outputSection!.get('button[aria-expanded="false"]').trigger('click')
     expect(wrapper.text()).toContain('result')
   })
 })
