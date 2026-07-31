@@ -91,7 +91,7 @@ describe('PublicAppPage', () => {
   })
 
   it('restores the last public run after a refresh', async () => {
-    sessionStorage.setItem('weaverun:public-run:image-app', 'run-restored')
+    sessionStorage.setItem('ordo:public-run:image-app', 'run-restored')
     vi.mocked(axios.get)
       .mockResolvedValueOnce({ data: application })
       .mockResolvedValueOnce({ data: { run_id: 'run-restored', status: 'succeeded', outputs: { images: ['restored-image'] } } })
@@ -157,7 +157,7 @@ describe('PublicAppPage', () => {
     await flushPromises()
 
     expect(axios.post).toHaveBeenCalledWith('/v1/apps/image-app/access', { password: 'partner-password' })
-    expect(sessionStorage.getItem('weaverun:app-access:image-app')).toBe('app-grant-token')
+    expect(sessionStorage.getItem('ordo:app-access:image-app')).toBe('app-grant-token')
     expect(wrapper.find('form.surface').exists()).toBe(true)
   })
 })

@@ -51,11 +51,7 @@ export function getNodeOutputVariables(node: WorkflowNodeLike): WorkflowVariable
   if (type === 'document') {
     const outputs: Record<string, Array<[string, string]>> = {
       extract: [['content', 'String'], ['tables', 'Array[Object]'], ['images', 'Array[File]']],
-      create: [['file', 'File']],
-      convert: [['file', 'File']],
-      merge: [['file', 'File']],
-      split: [['files', 'Array[File]']],
-      ocr: [['text', 'String'], ['file', 'File'], ['blocks', 'Array[Object]']],
+      fill_answers: [['file', 'File'], ['inserted_count', 'Number'], ['requested_count', 'Number'], ['insertions', 'Array[Object]']],
     }
     return withErrorVariables((outputs[config.operation || 'extract'] || outputs.extract).map(([label, variableType]) => ({ path: `${prefix}.${label}`, label, type: variableType })))
   }

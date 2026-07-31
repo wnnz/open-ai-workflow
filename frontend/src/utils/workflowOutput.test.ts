@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { collectWorkflowImages, compactWorkflowOutput } from './workflowOutput'
+import { collectWorkflowFiles, collectWorkflowImages, compactWorkflowOutput } from './workflowOutput'
 
 describe('workflow image outputs', () => {
   it('collects data and remote image results without treating arbitrary URLs as images', () => {
@@ -14,5 +14,16 @@ describe('workflow image outputs', () => {
     expect(compactWorkflowOutput({ images: ['data:image/png;base64,AAAA'] })).toEqual({
       images: ['[image/png image data, 0.0 KB]'],
     })
+  })
+
+  it('collects downloadable workflow files once', () => {
+    const file = {
+      id: 'file-1',
+      filename: 'exam-answered.docx',
+      content_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      size: 2048,
+      download_url: '/v1/apps/exam/runs/run-1/files/file-1',
+    }
+    expect(collectWorkflowFiles({ file, nested: [file] })).toEqual([file])
   })
 })

@@ -11,6 +11,7 @@ class WorkflowCreate(BaseModel):
     slug: str | None = None
     description: str = ""
     app_type: str = "workflow"
+    template_id: str | None = Field(default=None, max_length=80)
 
 
 class WorkflowUpdate(BaseModel):

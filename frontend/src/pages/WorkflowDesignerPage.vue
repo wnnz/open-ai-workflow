@@ -73,6 +73,7 @@ const ParameterExtractorConfigPanel = defineAsyncComponent(() => import('@/compo
 const ScriptConfigPanel = defineAsyncComponent(() => import('@/components/designer/ScriptConfigPanel.vue'))
 const SubworkflowConfigPanel = defineAsyncComponent(() => import('@/components/designer/SubworkflowConfigPanel.vue'))
 const TemplateConfigPanel = defineAsyncComponent(() => import('@/components/designer/TemplateConfigPanel.vue'))
+const DocumentConfigPanel = defineAsyncComponent(() => import('@/components/designer/DocumentConfigPanel.vue'))
 const IterationConfigPanel = defineAsyncComponent(() => import('@/components/designer/IterationConfigPanel.vue'))
 const VariableAssignConfigPanel = defineAsyncComponent(() => import('@/components/designer/VariableAssignConfigPanel.vue'))
 const route = useRoute(); const router = useRouter()
@@ -162,7 +163,7 @@ const paletteSections = computed(() => {
   const query = paletteQuery.value.trim().toLocaleLowerCase()
   const sections = [
     { key: 'ai', items: [{ type: 'agent', icon: BrainCircuit }, { type: 'llm', icon: Bot }, { type: 'image', icon: Images }, { type: 'end', icon: CircleStop }, { type: 'classifier', icon: ListFilter }] },
-    { key: 'data', items: [{ type: 'template', icon: FileText }, { type: 'variable', icon: ListTree }, { type: 'json', icon: Code2 }, { type: 'aggregate', icon: Combine }, { type: 'extract', icon: ScanText }, { type: 'list', icon: ListFilter }] },
+    { key: 'data', items: [{ type: 'document', icon: FileText }, { type: 'template', icon: FileText }, { type: 'variable', icon: ListTree }, { type: 'json', icon: Code2 }, { type: 'aggregate', icon: Combine }, { type: 'extract', icon: ScanText }, { type: 'list', icon: ListFilter }] },
     { key: 'tools', items: [{ type: 'code', icon: Code2 }, { type: 'script', icon: Braces }, { type: 'http', icon: Globe2 }] },
     { key: 'logic', items: [{ type: 'condition', icon: GitBranch }, { type: 'wait', icon: GitMerge }, { type: 'human', icon: UserCheck }, { type: 'iteration', icon: Repeat2 }, { type: 'loop', icon: RefreshCw }, { type: 'subworkflow', icon: Workflow }, { type: 'delay', icon: Timer }] },
   ]
@@ -1307,6 +1308,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
                 <ScriptConfigPanel v-else-if="selectedType === 'script'" :config="selected.data.config" :scripts="scripts" :workspace-id="workspaceId" :variable-groups="variableGroups" />
                 <HttpConfigPanel v-else-if="selectedType === 'http'" :config="selected.data.config" :variable-groups="variableGroups" :buffers="configBuffers" :errors="configFieldErrors" @structured="updateStructuredField" />
                 <TemplateConfigPanel v-else-if="selectedType === 'template'" :config="selected.data.config" :variable-groups="variableGroups" />
+                <DocumentConfigPanel v-else-if="selectedType === 'document'" :config="selected.data.config" :variable-groups="variableGroups" />
                 <VariableAssignConfigPanel v-else-if="selectedType === 'variable'" :key="selected.id" :config="selected.data.config" :variable-groups="variableGroups" />
                 <JsonEditorField v-else-if="selectedType === 'json'" v-model="configBuffers.jsonValue" class="mt-5" :label="t('designer.jsonValue')" :error="configFieldErrors.jsonValue" :groups="variableGroups" height-class="h-52" @input="updateStructuredField('value', 'jsonValue')" />
                 <AggregateConfigPanel v-else-if="selectedType === 'aggregate'" :config="selected.data.config" :variable-groups="variableGroups" />

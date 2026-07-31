@@ -45,7 +45,7 @@ watch(() => workspaces.activeId, loadPublishedApps)
     <aside class="fixed inset-y-0 left-0 z-30 flex w-64 flex-col border-r border-[var(--border)] bg-[var(--panel-subtle)] p-3">
       <div class="flex h-10 items-center gap-2 px-2 text-lg font-bold tracking-tight">
         <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--primary)] text-sm text-white">O</span>
-        <span>WeaveRun</span>
+        <span>Ordo</span>
       </div>
       <div class="relative mt-3">
         <button class="surface focus-ring flex h-10 w-full items-center gap-2 rounded-xl px-2.5 text-left text-sm" @click="workspaceOpen = !workspaceOpen">

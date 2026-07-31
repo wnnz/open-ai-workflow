@@ -338,15 +338,15 @@ describe('workflow graph utilities', () => {
   })
 
   it('validates operation-specific document inputs and settings', () => {
-    const document = { id: 'document', type: 'document', position: { x: 0, y: 0 }, data: { nodeType: 'document', label: 'Document', config: { operation: 'merge', sources: '', output_format: 'zip' } } }
+    const document = { id: 'document', type: 'document', position: { x: 0, y: 0 }, data: { nodeType: 'document', label: 'Document', config: { operation: 'fill_answers', source: '', answers: '' } } }
     const configured = [
       { ...nodes[0], data: { nodeType: 'start', config: { triggers: ['api'], input_fields: [{ name: 'files', type: 'files' }] } } },
       document,
       { ...nodes[2], data: { nodeType: 'end', config: { outputs: [{ name: 'file', type: 'File', value: '{{document.file}}' }] } } },
     ]
     const edges = [{ id: 'a', source: 'start', target: 'document' }, { id: 'b', source: 'document', target: 'end' }]
-    expect(validateWorkflowGraph(configured, edges).map(issue => issue.code)).toEqual(expect.arrayContaining(['documentSourcesRequired', 'documentSettingsInvalid']))
-    Object.assign((document as any).data.config, { sources: '{{inputs.files}}', output_format: 'pdf' })
+    expect(validateWorkflowGraph(configured, edges).map(issue => issue.code)).toEqual(expect.arrayContaining(['documentSourceRequired', 'documentContentRequired']))
+    Object.assign((document as any).data.config, { source: '{{inputs.files}}', answers: '{{llm.structured_output}}' })
     expect(validateWorkflowGraph(configured, edges)).toEqual([])
   })
 

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, File, Header, HTTPException, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -26,9 +26,11 @@ from app.models.entities import (
 from app.schemas.workflow import RunIn
 from app.services.run_events import stream_run_events
 from app.services.script_runtime import hydrate_script_resources
+from app.services.storage import object_path
 from app.services.task_queue import enqueue_workflow_run
 from app.services.uploads import store_upload
 from app.services.workflow_engine import validate_run_inputs
+from app.services.workflow_files import contains_file_id
 
 router = APIRouter(prefix="/apps", tags=["published apps"])
 
@@ -353,6 +355,35 @@ async def get_published_run(
         "created_at": run.created_at,
         "finished_at": run.finished_at,
     }
+
+
+@router.get("/{app_slug}/runs/{run_id}/files/{file_id}")
+async def download_published_run_file(
+    app_slug: str,
+    run_id: str,
+    file_id: str,
+    db: DbSession,
+    authorization: str | None = Header(default=None),
+    x_app_access: str | None = Header(default=None),
+) -> FileResponse:
+    workflow, version = await get_published(db, app_slug)
+    credential = await authorize_run_access(db, workflow, authorization, x_app_access)
+    run = await db.get(WorkflowRun, run_id)
+    stored = await db.get(StoredFile, file_id)
+    if (
+        not run
+        or run.workflow_id != workflow.id
+        or run.workflow_version_id != version.id
+        or not stored
+        or stored.workspace_id != workflow.workspace_id
+        or not contains_file_id(run.outputs, file_id)
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Workflow output file not found")
+    ensure_run_access(credential, run)
+    path = object_path(stored.object_key)
+    if not path.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Workflow output file not found")
+    return FileResponse(path, media_type=stored.content_type, filename=stored.filename)
 
 
 @router.get("/{app_slug}/runs/{run_id}/events")

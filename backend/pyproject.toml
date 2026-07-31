@@ -1,5 +1,5 @@
 [project]
-name = "weaverun-api"
+name = "ordo-api"
 version = "0.1.0"
 description = "Multi-workspace AI workflow API"
 requires-python = ">=3.12"

@@ -2,13 +2,14 @@ from copy import deepcopy
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import delete, func, select
 
 from app.api.deps import CurrentUser, DbSession
 from app.core.config import get_settings
 from app.core.security import decrypt_secret, encrypt_secret, hash_password
 from app.models.entities import (
+    ModelProvider,
     Script,
     ScriptVersion,
     StoredFile,
@@ -42,6 +43,7 @@ from app.services.model_providers import load_model_provider_runtimes
 from app.services.run_events import stream_run_events
 from app.services.scheduling import next_schedule_at
 from app.services.script_runtime import hydrate_script_resources
+from app.services.storage import object_path
 from app.services.task_queue import enqueue_workflow_run
 from app.services.uploads import store_upload
 from app.services.workflow_engine import (
@@ -52,6 +54,15 @@ from app.services.workflow_engine import (
     validate_run_inputs,
 )
 from app.services.workflow_environment import build_system_variables, load_workflow_environment
+from app.services.workflow_files import (
+    contains_file_id,
+    hydrate_file_references,
+    materialize_generated_files,
+)
+from app.services.workflow_templates import (
+    ENGLISH_EXAM_TEMPLATE_ID,
+    build_english_exam_graph,
+)
 from app.services.workspaces import audit, require_role, slugify
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/workflows", tags=["workflows"])
@@ -194,13 +205,38 @@ async def create_workflow(
     workspace_id: str, payload: WorkflowCreate, db: DbSession, user: CurrentUser
 ) -> Workflow:
     await require_role(db, workspace_id, user.id, "editor")
+    graph = deepcopy(DEFAULT_GRAPH)
+    description = payload.description
+    app_type = payload.app_type
+    if payload.template_id:
+        if payload.template_id != ENGLISH_EXAM_TEMPLATE_ID:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Unknown workflow template")
+        provider = await db.scalar(
+            select(ModelProvider)
+            .where(ModelProvider.workspace_id == workspace_id)
+            .order_by(ModelProvider.created_at, ModelProvider.id)
+        )
+        if not provider:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "Configure a model provider before creating the English exam workflow",
+            )
+        capabilities = provider.config.get("capabilities", {}) if isinstance(provider.config, dict) else {}
+        graph = build_english_exam_graph(
+            provider_id=provider.id,
+            model=provider.default_model,
+            vision_enabled=bool(capabilities.get("vision", False)),
+        )
+        validate_graph(graph)
+        app_type = "workflow"
+        description = description or "上传英语试卷 Word 文件，自动完成非听力题并返回红字答案版。"
     workflow = Workflow(
         workspace_id=workspace_id,
         name=payload.name,
         slug=payload.slug or slugify(payload.name),
-        description=payload.description,
-        app_type=payload.app_type,
-        draft_graph=DEFAULT_GRAPH,
+        description=description,
+        app_type=app_type,
+        draft_graph=graph,
         created_by=user.id,
     )
     db.add(workflow)
@@ -759,17 +795,27 @@ async def run_draft_node(
     try:
         environment = await load_workflow_environment(db, workspace_id, workflow_id)
         model_providers = await load_model_provider_runtimes(db, workspace_id)
+        hydrated_inputs = await hydrate_file_references(db, workspace_id, payload.inputs)
         system = build_system_variables(workflow_id=workflow_id, run_id=run.id, user_id=user.id)
         output, trace = execute_node_preview(
             node,
-            payload.inputs,
+            hydrated_inputs,
             environment=environment,
             system=system,
             model_providers=model_providers,
         )
+        outputs = output if isinstance(output, dict) else {"value": output}
+        outputs, traces = await materialize_generated_files(
+            db,
+            workspace_id=workspace_id,
+            created_by=user.id,
+            outputs=outputs,
+            trace=[trace],
+            download_url=lambda file_id: f"/api/v1/workspaces/{workspace_id}/workflows/{workflow_id}/runs/{run.id}/files/{file_id}",
+        )
         run.status = "succeeded"
-        run.outputs = output if isinstance(output, dict) else {"value": output}
-        run.trace = [trace]
+        run.outputs = outputs
+        run.trace = traces
     except Exception as exc:
         run.status = "failed"
         run.error = str(exc)
@@ -830,6 +876,33 @@ async def get_run(
     if not run or run.workspace_id != workspace_id or run.workflow_id != workflow_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Workflow run not found")
     return run
+
+
+@router.get("/{workflow_id}/runs/{run_id}/files/{file_id}")
+async def download_run_file(
+    workspace_id: str,
+    workflow_id: str,
+    run_id: str,
+    file_id: str,
+    db: DbSession,
+    user: CurrentUser,
+) -> FileResponse:
+    await require_role(db, workspace_id, user.id)
+    run = await db.get(WorkflowRun, run_id)
+    stored = await db.get(StoredFile, file_id)
+    if (
+        not run
+        or run.workspace_id != workspace_id
+        or run.workflow_id != workflow_id
+        or not stored
+        or stored.workspace_id != workspace_id
+        or not contains_file_id(run.outputs, file_id)
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Workflow output file not found")
+    path = object_path(stored.object_key)
+    if not path.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Workflow output file not found")
+    return FileResponse(path, media_type=stored.content_type, filename=stored.filename)
 
 
 @router.get("/{workflow_id}/runs/{run_id}/events")

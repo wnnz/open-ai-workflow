@@ -35,8 +35,8 @@ const headers = (): Record<string, string> => {
   return {}
 }
 const runStorageKey = () => app.value?.access === 'protected'
-  ? `weaverun:public-run:${slug}:${auth.user?.id || 'anonymous'}`
-  : `weaverun:public-run:${slug}`
+  ? `ordo:public-run:${slug}:${auth.user?.id || 'anonymous'}`
+  : `ordo:public-run:${slug}`
 const running = computed(() => Boolean(result.value && !terminalStatuses.has(result.value.status)))
 
 async function redirectToLogin() {
@@ -50,7 +50,7 @@ async function initializeForm() {
 }
 
 async function authorizeStoredPassword() {
-  const stored = sessionStorage.getItem(`weaverun:app-access:${slug}`)
+  const stored = sessionStorage.getItem(`ordo:app-access:${slug}`)
   if (!stored) return false
   try {
     await axios.post(`/v1/apps/${slug}/access`, {}, { headers: { 'X-App-Access': stored } })
@@ -58,7 +58,7 @@ async function authorizeStoredPassword() {
     await initializeForm()
     return true
   } catch {
-    sessionStorage.removeItem(`weaverun:app-access:${slug}`)
+    sessionStorage.removeItem(`ordo:app-access:${slug}`)
     return false
   }
 }
@@ -82,7 +82,7 @@ async function unlockWithPassword() {
   try {
     const { data } = await axios.post(`/v1/apps/${slug}/access`, { password: accessPassword.value })
     appAccessToken.value = data.access_token
-    sessionStorage.setItem(`weaverun:app-access:${slug}`, data.access_token)
+    sessionStorage.setItem(`ordo:app-access:${slug}`, data.access_token)
     accessPassword.value = ''
     await initializeForm()
   } catch (cause: any) { error.value = cause.response?.data?.detail || String(cause) }
@@ -207,7 +207,7 @@ onMounted(load)
         <Button class="mt-6 w-full" type="submit" :loading="loading" :disabled="loading"><Play :size="16" />{{ t('publicApp.run') }}</Button>
         <AlertBanner v-if="running" :message="t('publicApp.running')" tone="info" />
         <AlertBanner v-else-if="result?.status === 'waiting'" :message="t('publicApp.waiting')" tone="info" />
-        <WorkflowOutputRenderer v-if="result?.status === 'succeeded'" class="mt-4" :output="result.outputs" />
+        <WorkflowOutputRenderer v-if="result?.status === 'succeeded'" class="mt-4" :output="result.outputs" :download-headers="headers()" />
       </form>
       <section v-else-if="app?.triggers?.includes('form') && app?.access === 'protected'" class="surface rounded-xl p-6 shadow-sm">
         <div class="flex items-center gap-3"><span class="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--primary-soft)] text-[var(--primary)]"><LockKeyhole :size="18" /></span><div><h2 class="text-sm font-semibold">{{ t('publicApp.protectedTitle') }}</h2><p class="muted mt-0.5 text-xs">{{ t('publicApp.protectedHint') }}</p></div></div>

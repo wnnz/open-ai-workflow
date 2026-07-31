@@ -1,6 +1,6 @@
 export const executionPolicyNodeTypes = new Set([
   'llm', 'image', 'agent', 'code', 'script', 'template', 'variable', 'json', 'aggregate',
-  'extract', 'list', 'http', 'iteration', 'loop', 'delay', 'subworkflow',
+  'extract', 'list', 'http', 'iteration', 'loop', 'delay', 'subworkflow', 'document',
 ])
 
 type Translate = (key: string) => string
@@ -39,6 +39,7 @@ export function useDesignerNodeConfig(t: Translate) {
       wait: { mode: 'all' },
       delay: { seconds: 60 },
       subworkflow: { workflow_id: '', inputs: {} },
+      document: { operation: 'extract', source: '', extract_mode: 'text', page_range: '', ocr_fallback: false, answers: '', output_name: '英语试卷_已作答.docx' },
     }
     const value = structuredClone(defaults[type] || {})
     if (executionPolicyNodeTypes.has(type)) Object.assign(value, {

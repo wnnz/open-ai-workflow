@@ -94,12 +94,10 @@ describe('workflow variable catalog', () => {
       expect.objectContaining({ path: 'document-1.content', type: 'String' }),
       expect.objectContaining({ path: 'document-1.tables', type: 'Array[Object]' }),
     ]))
-    expect(getNodeOutputVariables(document('split'))).toEqual([
-      expect.objectContaining({ path: 'document-1.files', type: 'Array[File]' }),
-    ])
-    expect(getNodeOutputVariables(document('ocr'))).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: 'document-1.text', type: 'String' }),
-      expect.objectContaining({ path: 'document-1.blocks', type: 'Array[Object]' }),
+    expect(getNodeOutputVariables(document('fill_answers'))).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'document-1.file', type: 'File' }),
+      expect.objectContaining({ path: 'document-1.inserted_count', type: 'Number' }),
+      expect.objectContaining({ path: 'document-1.insertions', type: 'Array[Object]' }),
     ]))
   })
 

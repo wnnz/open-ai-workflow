@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_secret_key: str = "development-only-secret-change-me"
     credential_encryption_key: str | None = None
-    database_url: str = "sqlite+aiosqlite:///./weaverun.db"
+    database_url: str = "sqlite+aiosqlite:///./ordo.db"
     redis_url: str = "redis://localhost:6379/0"
     storage_path: str = "./data/files"
     access_token_minutes: int = 720

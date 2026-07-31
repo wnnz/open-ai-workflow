@@ -573,20 +573,10 @@ export function validateWorkflowGraph(
     if (type === 'delay' && (!(Number(config.seconds) > 0) || Number(config.seconds) > 86400)) issues.push({ code: 'delayDurationInvalid', nodeId: node.id, params })
     if (type === 'document') {
       const operation = String(config.operation || 'extract')
-      if (!['extract', 'create', 'convert', 'merge', 'split', 'ocr'].includes(operation)) issues.push({ code: 'documentOperationInvalid', nodeId: node.id, params })
-      if (operation === 'create') {
-        if (!String(config.content || '').trim()) issues.push({ code: 'documentContentRequired', nodeId: node.id, params })
-        if (!['docx', 'xlsx', 'pptx', 'pdf'].includes(config.format || 'docx')) issues.push({ code: 'documentSettingsInvalid', nodeId: node.id, params })
-      } else if (operation === 'merge') {
-        if (!String(config.sources || '').trim()) issues.push({ code: 'documentSourcesRequired', nodeId: node.id, params })
-        if (!['pdf', 'docx'].includes(config.output_format || 'pdf')) issues.push({ code: 'documentSettingsInvalid', nodeId: node.id, params })
-      } else {
-        if (!String(config.source || '').trim()) issues.push({ code: 'documentSourceRequired', nodeId: node.id, params })
-        if ((operation === 'extract' && !['text', 'text_tables', 'text_images'].includes(config.extract_mode || 'text'))
-          || (operation === 'convert' && !['pdf', 'docx', 'xlsx', 'pptx', 'txt', 'html', 'images'].includes(config.target_format || 'pdf'))
-          || (operation === 'split' && (!['pages', 'ranges', 'sheets', 'slides'].includes(config.split_mode || 'pages') || (config.split_mode === 'ranges' && !String(config.ranges || '').trim())))
-          || (operation === 'ocr' && (!String(config.languages || '').trim() || !['text', 'searchable_pdf', 'json'].includes(config.ocr_output_format || 'text')))) issues.push({ code: 'documentSettingsInvalid', nodeId: node.id, params })
-      }
+      if (!['extract', 'fill_answers'].includes(operation)) issues.push({ code: 'documentOperationInvalid', nodeId: node.id, params })
+      if (!String(config.source || '').trim()) issues.push({ code: 'documentSourceRequired', nodeId: node.id, params })
+      if (operation === 'extract' && !['text', 'text_tables', 'text_images'].includes(config.extract_mode || 'text')) issues.push({ code: 'documentSettingsInvalid', nodeId: node.id, params })
+      if (operation === 'fill_answers' && !String(config.answers || '').trim()) issues.push({ code: 'documentContentRequired', nodeId: node.id, params })
     }
   }
 

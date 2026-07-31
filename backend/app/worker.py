@@ -28,10 +28,15 @@ from app.services.scripts import validate_inputs
 from app.services.task_queue import enqueue_workflow_run
 from app.services.workflow_engine import WorkflowPause, execute_graph
 from app.services.workflow_environment import build_system_variables, load_workflow_environment
+from app.services.workflow_files import (
+    hydrate_file_references,
+    materialize_generated_files,
+    strip_internal_file_metadata,
+)
 
 logger = logging.getLogger(__name__)
 configure_logging()
-configure_otel("weaverun-worker")
+configure_otel("ordo-worker")
 
 
 async def _run_and_dispose(coroutine):
@@ -120,8 +125,12 @@ async def _execute_run(run_id: str, approval_id: str | None = None) -> str:
         await db.commit()
         publish_run_event(run.id, {"type": "run_started", "status": "running"})
         try:
+            workflow = await db.get(Workflow, run.workflow_id)
+            if not workflow:
+                raise ValueError("Workflow not found")
             environment = await load_workflow_environment(db, run.workspace_id, run.workflow_id)
             model_providers = await load_model_provider_runtimes(db, run.workspace_id)
+            hydrated_inputs = await hydrate_file_references(db, run.workspace_id, run.inputs)
             system = build_system_variables(
                 workflow_id=run.workflow_id,
                 run_id=run.id,
@@ -131,9 +140,9 @@ async def _execute_run(run_id: str, approval_id: str | None = None) -> str:
                 "workflow.run",
                 attributes={"workflow.id": run.workflow_id, "run.id": run.id},
             ):
-                run.outputs, run.trace = execute_graph(
+                outputs, node_trace = execute_graph(
                     graph,
-                    run.inputs,
+                    hydrated_inputs,
                     resume_state=resume_state,
                     environment=environment,
                     system=system,
@@ -142,6 +151,19 @@ async def _execute_run(run_id: str, approval_id: str | None = None) -> str:
                         record_node_event(event), publish_run_event(run.id, event)
                     ),
                 )
+            public_run = run.triggered_by in {"form", "api", "webhook"}
+            run.outputs, run.trace = await materialize_generated_files(
+                db,
+                workspace_id=run.workspace_id,
+                created_by=run.created_by or workflow.created_by,
+                outputs=outputs,
+                trace=node_trace,
+                download_url=(
+                    lambda file_id: f"/v1/apps/{workflow.slug}/runs/{run.id}/files/{file_id}"
+                    if public_run
+                    else f"/api/v1/workspaces/{run.workspace_id}/workflows/{run.workflow_id}/runs/{run.id}/files/{file_id}"
+                ),
+            )
             run.status = "succeeded"
             run.finished_at = datetime.now(UTC)
         except WorkflowPause as pause:
@@ -159,7 +181,7 @@ async def _execute_run(run_id: str, approval_id: str | None = None) -> str:
             db.add(waiting)
             await db.flush()
             run.status = "waiting"
-            run.trace = [
+            run.trace = strip_internal_file_metadata([
                 *pause.resume_state.get("trace", []),
                 {
                     "node_id": pause.node_id,
@@ -172,7 +194,7 @@ async def _execute_run(run_id: str, approval_id: str | None = None) -> str:
                     "started_at": datetime.now(UTC).isoformat(),
                     "finished_at": None,
                 },
-            ]
+            ])
         except Exception as exc:
             logger.exception("Workflow run failed", extra={"run_id": run.id})
             run.status = "failed"

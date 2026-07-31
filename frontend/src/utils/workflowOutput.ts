@@ -1,6 +1,43 @@
 const DATA_IMAGE = /^data:image\/[a-z0-9.+-]+;base64,/i
 const REMOTE_IMAGE = /^https?:\/\//i
 
+export type WorkflowFileOutput = {
+  id: string
+  filename: string
+  content_type: string
+  size: number
+  download_url: string
+}
+
+export function collectWorkflowFiles(value: unknown): WorkflowFileOutput[] {
+  const files: WorkflowFileOutput[] = []
+  const seen = new Set<string>()
+
+  function visit(item: unknown) {
+    if (Array.isArray(item)) return item.forEach(visit)
+    if (!item || typeof item !== 'object') return
+    const record = item as Record<string, unknown>
+    if (record.id && record.filename && record.download_url) {
+      const id = String(record.id)
+      if (!seen.has(id)) {
+        seen.add(id)
+        files.push({
+          id,
+          filename: String(record.filename),
+          content_type: String(record.content_type || 'application/octet-stream'),
+          size: Number(record.size || 0),
+          download_url: String(record.download_url),
+        })
+      }
+      return
+    }
+    Object.values(record).forEach(visit)
+  }
+
+  visit(value)
+  return files
+}
+
 export function collectWorkflowImages(value: unknown): string[] {
   const images: string[] = []
   const seen = new Set<string>()

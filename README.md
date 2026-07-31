@@ -1,6 +1,6 @@
-# WeaveRun
+# Ordo
 
-WeaveRun is a self-hosted, multi-workspace AI workflow platform built with Python and Vue. It provides a visual workflow designer, versioned Python scripts, OpenAI-compatible models, queued execution, streaming run events, and application publishing.
+Ordo is a self-hosted, multi-workspace AI workflow platform built with Python and Vue. It provides a visual workflow designer, versioned Python scripts, OpenAI-compatible models, queued execution, streaming run events, and application publishing.
 
 ## Quick start
 
@@ -68,9 +68,9 @@ cancel it through `POST .../scripts/tests/{task_id}/cancel`.
 - `sandbox`: restricted Python script execution service
 - PostgreSQL with pgvector, Redis, and local persistent file storage
 
-The retired knowledge-base and document-node features are not part of the stack. New document
-nodes cannot be added from the product UI; legacy document nodes remain readable for migration
-compatibility but cannot execute.
+Knowledge-base nodes remain retired. Native document nodes support DOCX text/image extraction and
+deterministic answer insertion; generated files are stored by the file service and can be downloaded
+from Studio runs or published form runs.
 
 Scheduled workflow dispatch is optional. Start Celery beat only when scheduled workflows are used:
 

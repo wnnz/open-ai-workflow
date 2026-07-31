@@ -14,7 +14,7 @@ from fastapi import FastAPI, Header, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
-app = FastAPI(title="WeaveRun Sandbox", docs_url=None, redoc_url=None)
+app = FastAPI(title="Ordo Sandbox", docs_url=None, redoc_url=None)
 ENTRYPOINT = re.compile(r"^(?:[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:)?[A-Za-z_]\w*$")
 MAX_SOURCE_BYTES = 5_000_000
 MAX_SOURCE_FILES = 100
@@ -179,7 +179,7 @@ def execution_events(payload: ExecuteRequest) -> Iterator[dict]:
     saw_result = False
     try:
         container = client.containers.create(
-            os.getenv("SANDBOX_RUNTIME_IMAGE", "weaverun-sandbox"),
+            os.getenv("SANDBOX_RUNTIME_IMAGE", "ordo-sandbox"),
             ["python", "/workspace/runner.py"],
             network_disabled=not payload.network_enabled,
             mem_limit=f"{payload.memory_mb}m",
@@ -188,7 +188,7 @@ def execution_events(payload: ExecuteRequest) -> Iterator[dict]:
             cap_drop=["ALL"],
             security_opt=["no-new-privileges"],
             tmpfs={"/tmp": "rw,noexec,nosuid,size=64m,mode=1777"},
-            labels={"weaverun.sandbox-job": job_id},
+            labels={"ordo.sandbox-job": job_id},
         )
         with active_lock:
             active_containers[job_id] = container

@@ -1,4 +1,4 @@
-name: weaverun
+name: ordo
 
 x-build-proxy: &build-proxy
   HTTP_PROXY: ${CONTAINER_HTTP_PROXY:-http://host.docker.internal:10808}
@@ -6,7 +6,7 @@ x-build-proxy: &build-proxy
   NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,postgres,redis,api,worker,sandbox,sandbox-docker-proxy}
 
 x-backend: &backend
-  image: weaverun-api
+  image: ordo-api
   build:
     context: ./backend
     args: *build-proxy
@@ -27,14 +27,14 @@ services:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
-      POSTGRES_USER: weaverun
-      POSTGRES_PASSWORD: weaverun
-      POSTGRES_DB: weaverun
+      POSTGRES_USER: ordo
+      POSTGRES_PASSWORD: ordo
+      POSTGRES_DB: ordo
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U weaverun"]
+      test: ["CMD-SHELL", "pg_isready -U ordo -d ordo"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -78,14 +78,14 @@ services:
     command: celery -A app.worker.celery beat --loglevel=INFO
 
   sandbox:
-    image: weaverun-sandbox
+    image: ordo-sandbox
     build:
       context: ./sandbox
       args: *build-proxy
     restart: unless-stopped
     environment:
       SANDBOX_SHARED_SECRET: ${SANDBOX_SHARED_SECRET:?SANDBOX_SHARED_SECRET must be set}
-      SANDBOX_RUNTIME_IMAGE: weaverun-sandbox
+      SANDBOX_RUNTIME_IMAGE: ordo-sandbox
       DOCKER_HOST: tcp://sandbox-docker-proxy:2375
     networks:
       - sandbox-runtime
@@ -130,13 +130,13 @@ services:
 
 volumes:
   postgres-data:
-    name: weaverun_postgres-data
+    name: ordo_postgres-data
   redis-data:
-    name: weaverun_redis-data
+    name: ordo_redis-data
   file-data:
-    name: weaverun_file-data
+    name: ordo_file-data
   sandbox-proxy-config:
-    name: weaverun_sandbox-proxy-config
+    name: ordo_sandbox-proxy-config
 
 networks:
   sandbox-runtime:

@@ -19,6 +19,7 @@ from jinja2 import StrictUndefined, TemplateError
 from jinja2.sandbox import SandboxedEnvironment
 
 from app.core.config import get_settings
+from app.services.document_processing import execute_document
 from app.services.model_execution import (
     execute_agent,
     execute_extractor,
@@ -719,44 +720,17 @@ def validate_http_config(config: dict[str, Any]) -> None:
 
 def validate_document_config(config: dict[str, Any]) -> None:
     operation = config.get("operation", "extract")
-    if operation not in {"extract", "create", "convert", "merge", "split", "ocr"}:
+    if operation not in {"extract", "fill_answers"}:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document operation")
-    if operation == "create":
-        if not isinstance(config.get("content"), str) or not config["content"].strip():
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Document content is required")
-        if config.get("format", "docx") not in {"docx", "xlsx", "pptx", "pdf"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document output format")
-    elif operation == "merge":
-        if not isinstance(config.get("sources"), str) or not config["sources"].strip():
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Document source files are required")
-        if config.get("output_format", "pdf") not in {"pdf", "docx"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document merge format")
-    else:
-        if not isinstance(config.get("source"), str) or not config["source"].strip():
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Document source file is required")
+    if not isinstance(config.get("source"), str) or not config["source"].strip():
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Document source file is required")
     if operation == "extract":
         if config.get("extract_mode", "text") not in {"text", "text_tables", "text_images"}:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document extraction mode")
         if not isinstance(config.get("ocr_fallback", True), bool):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document OCR fallback")
-    elif operation == "convert":
-        if config.get("target_format", "pdf") not in {"pdf", "docx", "xlsx", "pptx", "txt", "html", "images"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document target format")
-        if not isinstance(config.get("preserve_layout", True), bool):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document layout setting")
-    elif operation == "split":
-        split_mode = config.get("split_mode", "pages")
-        if split_mode not in {"pages", "ranges", "sheets", "slides"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document split mode")
-        if split_mode == "ranges" and (not isinstance(config.get("ranges"), str) or not config["ranges"].strip()):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Document split ranges are required")
-    elif operation == "ocr":
-        if not isinstance(config.get("languages", "chi_sim+eng"), str) or not config.get("languages", "").strip():
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Document OCR languages are required")
-        if config.get("ocr_output_format", "text") not in {"text", "searchable_pdf", "json"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document OCR output format")
-        if not isinstance(config.get("deskew", True), bool):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid document deskew setting")
+    elif not isinstance(config.get("answers"), str) or not config["answers"].strip():
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Document answer plan is required")
 
 
 def validate_execution_policy(config: dict[str, Any]) -> None:
@@ -851,7 +825,7 @@ TRACE_INPUT_KEYS: dict[str, tuple[str, ...]] = {
     "wait": ("mode",),
     "delay": ("seconds",),
     "subworkflow": ("workflow_id", "inputs"),
-    "document": ("operation", "source", "extract_mode", "page_range", "output_format"),
+    "document": ("operation", "source", "answers", "extract_mode", "output_name"),
 }
 
 
@@ -906,7 +880,7 @@ def build_node_trace_metadata(
     context: dict[str, Any],
 ) -> dict[str, Any]:
     node_type = str(node.get("type") or "")
-    executor = "sandbox" if node_type in {"code", "script"} else "network" if node_type == "http" else "model" if node_type in {"llm", "image", "agent", "classifier", "extract"} else "unsupported" if node_type == "document" else "built-in"
+    executor = "sandbox" if node_type in {"code", "script"} else "network" if node_type == "http" else "model" if node_type in {"llm", "image", "agent", "classifier", "extract"} else "built-in"
     environment = context.get("env", {})
     secrets = list(environment.values()) if isinstance(environment, dict) else []
     logs = output.get("_logs", []) if isinstance(output, dict) else []
@@ -1433,6 +1407,8 @@ def execute_node(node: dict[str, Any], context: dict[str, Any]) -> Any:
         return extract_structured_parameters(config)
     if node_type == "http":
         return execute_http_request(config)
+    if node_type == "document":
+        return execute_document(config)
     if node_type == "subworkflow":
         child_graph = raw_config.get("_resolved_graph")
         if not isinstance(child_graph, dict):

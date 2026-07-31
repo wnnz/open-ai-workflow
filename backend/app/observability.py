@@ -22,10 +22,10 @@ from app.services.run_events import publisher
 
 request_id_context: ContextVar[str] = ContextVar("request_id", default="")
 REQUEST_COUNT = Counter(
-    "weaverun_http_requests_total", "HTTP requests", ["method", "path", "status"]
+    "ordo_http_requests_total", "HTTP requests", ["method", "path", "status"]
 )
 REQUEST_DURATION = Histogram(
-    "weaverun_http_request_duration_seconds", "HTTP request duration", ["method", "path"]
+    "ordo_http_request_duration_seconds", "HTTP request duration", ["method", "path"]
 )
 
 
@@ -101,7 +101,7 @@ def record_node_event(event: dict) -> None:
 
 def install_observability(app: FastAPI) -> None:
     configure_logging()
-    configure_otel("weaverun-api", app)
+    configure_otel("ordo-api", app)
 
     @app.middleware("http")
     async def request_metrics(request: Request, call_next):
@@ -141,13 +141,13 @@ def install_observability(app: FastAPI) -> None:
         except RedisError:
             counts = {}
             durations = {}
-        body.extend(b"# HELP weaverun_workflow_nodes_total Executed workflow nodes\n")
-        body.extend(b"# TYPE weaverun_workflow_nodes_total counter\n")
+        body.extend(b"# HELP ordo_workflow_nodes_total Executed workflow nodes\n")
+        body.extend(b"# TYPE ordo_workflow_nodes_total counter\n")
         for key, value in counts.items():
             node_type, status = key.rsplit(":", 1)
-            body.extend(f'weaverun_workflow_nodes_total{{node_type="{node_type}",status="{status}"}} {value}\n'.encode())
-        body.extend(b"# HELP weaverun_workflow_node_duration_milliseconds_total Total node duration\n")
-        body.extend(b"# TYPE weaverun_workflow_node_duration_milliseconds_total counter\n")
+            body.extend(f'ordo_workflow_nodes_total{{node_type="{node_type}",status="{status}"}} {value}\n'.encode())
+        body.extend(b"# HELP ordo_workflow_node_duration_milliseconds_total Total node duration\n")
+        body.extend(b"# TYPE ordo_workflow_node_duration_milliseconds_total counter\n")
         for node_type, value in durations.items():
-            body.extend(f'weaverun_workflow_node_duration_milliseconds_total{{node_type="{node_type}"}} {value}\n'.encode())
+            body.extend(f'ordo_workflow_node_duration_milliseconds_total{{node_type="{node_type}"}} {value}\n'.encode())
         return Response(bytes(body), media_type=CONTENT_TYPE_LATEST)

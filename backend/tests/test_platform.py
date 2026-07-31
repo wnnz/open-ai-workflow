@@ -8,9 +8,9 @@ from pathlib import Path
 from time import sleep as sleep_for_test
 from unittest.mock import AsyncMock
 
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test-weaverun.db"
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test-ordo.db"
 os.environ["TASK_ALWAYS_EAGER"] = "true"
-Path("test-weaverun.db").unlink(missing_ok=True)
+Path("test-ordo.db").unlink(missing_ok=True)
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402
@@ -97,7 +97,7 @@ def schema():
     gc.collect()
     for _ in range(20):
         try:
-            Path("test-weaverun.db").unlink(missing_ok=True)
+            Path("test-ordo.db").unlink(missing_ok=True)
             break
         except PermissionError:
             sleep_for_test(0.05)
@@ -1088,19 +1088,13 @@ def test_llm_config_supports_messages_and_structured_output():
         validate_llm_config({"model": "gpt-4.1-mini", "prompt": "Hello", "reasoning": {"separate": "yes"}})
 
 
-def test_document_config_supports_office_pdf_operations():
+def test_document_config_supports_docx_answer_workflow_operations():
     validate_document_config({"operation": "extract", "source": "{{inputs.file}}", "extract_mode": "text_tables", "ocr_fallback": True})
-    validate_document_config({"operation": "create", "content": "{{llm.text}}", "format": "docx"})
-    validate_document_config({"operation": "convert", "source": "{{inputs.file}}", "target_format": "pdf", "preserve_layout": True})
-    validate_document_config({"operation": "merge", "sources": "{{inputs.files}}", "output_format": "pdf"})
-    validate_document_config({"operation": "split", "source": "{{inputs.file}}", "split_mode": "ranges", "ranges": "1-3,4-6"})
-    validate_document_config({"operation": "ocr", "source": "{{inputs.file}}", "languages": "chi_sim+eng", "ocr_output_format": "searchable_pdf", "deskew": True})
+    validate_document_config({"operation": "fill_answers", "source": "{{inputs.file}}", "answers": "{{llm.structured_output}}"})
     with pytest.raises(HTTPException):
-        validate_document_config({"operation": "merge", "sources": "", "output_format": "zip"})
+        validate_document_config({"operation": "fill_answers", "source": "{{inputs.file}}", "answers": ""})
     with pytest.raises(HTTPException):
-        validate_document_config({"operation": "split", "source": "{{inputs.file}}", "split_mode": "ranges", "ranges": ""})
-    with pytest.raises(HTTPException):
-        validate_document_config({"operation": "ocr", "source": "{{inputs.file}}", "languages": "", "ocr_output_format": "text"})
+        validate_document_config({"operation": "convert", "source": "{{inputs.file}}", "target_format": "pdf"})
 
 
 def test_http_node_validates_and_executes_a_structured_request():
@@ -1111,7 +1105,7 @@ def test_http_node_validates_and_executes_a_structured_request():
         assert request.url == "https://example.test/items?page=2"
         assert request.headers["authorization"] == "Bearer secret-token"
         assert request.headers["x-workflow"] == "test"
-        assert request.read() == b'{"name":"WeaveRun"}'
+        assert request.read() == b'{"name":"Ordo"}'
         return httpx.Response(201, json={"id": 42}, headers={"X-Result": "created"})
 
     output = execute_http_request(
@@ -1122,7 +1116,7 @@ def test_http_node_validates_and_executes_a_structured_request():
             "headers": {"X-Workflow": "test"},
             "auth": {"type": "bearer", "token": "secret-token"},
             "body_type": "json",
-            "body": {"name": "WeaveRun"},
+            "body": {"name": "Ordo"},
             "timeout_seconds": 10,
             "max_response_bytes": 4096,
         },
@@ -2343,3 +2337,115 @@ def test_agent_executes_tool_and_returns_final_answer(monkeypatch):
     assert result["text"] == "5"
     assert calls == [("add", {"a": 2, "b": 3})]
     assert result["intermediate_steps"][0]["result"] == {"sum": 5}
+
+
+def test_english_exam_template_runs_and_downloads_docx_in_studio_and_public(
+    client: TestClient, monkeypatch
+):
+    session = register(client, "exam-owner@example.com", "Exam Owner")
+    headers = auth(session)
+    workspace_id = client.get("/api/v1/workspaces", headers=headers).json()[0]["id"]
+    provider = client.post(
+        f"/api/v1/workspaces/{workspace_id}/models",
+        headers=headers,
+        json={
+            "name": "Exam provider",
+            "base_url": "https://models.example/v1",
+            "api_key": "test-secret",
+            "default_model": "test-model",
+            "config": {"capabilities": {"structured_output": True, "vision": False}},
+        },
+    )
+    assert provider.status_code == 201, provider.text
+
+    workflow = client.post(
+        f"/api/v1/workspaces/{workspace_id}/workflows",
+        headers=headers,
+        json={
+            "name": "English exam auto answer",
+            "template_id": "english_exam_answer_filler",
+        },
+    )
+    assert workflow.status_code == 201, workflow.text
+    workflow_data = workflow.json()
+    assert [node["type"] for node in workflow_data["draft_graph"]["nodes"]] == [
+        "start",
+        "document",
+        "llm",
+        "document",
+        "end",
+    ]
+
+    monkeypatch.setattr(
+        workflow_engine,
+        "execute_llm",
+        lambda runtime, config: {
+            "text": '{"insertions":[{"question_number":"Reading","anchor_id":"P0002","anchor":"A. is  B. are","answer":"1. are"}]}',
+            "structured_output": {
+                "insertions": [
+                    {
+                        "question_number": "Reading",
+                        "anchor_id": "P0002",
+                        "anchor": "A. is  B. are",
+                        "answer": "1. are",
+                    }
+                ]
+            },
+        },
+    )
+
+    document_xml = b'''<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Reading</w:t></w:r></w:p>
+<w:p><w:r><w:t>A. is  B. are</w:t></w:r></w:p><w:sectPr />
+</w:body></w:document>'''
+    document = io.BytesIO()
+    with zipfile.ZipFile(document, "w", zipfile.ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", "<Types />")
+        package.writestr("word/document.xml", document_xml)
+
+    upload = client.post(
+        f"/api/v1/workspaces/{workspace_id}/workflows/{workflow_data['id']}/files",
+        headers=headers,
+        files={"file": ("exam.docx", document.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+    )
+    assert upload.status_code == 201, upload.text
+    run = client.post(
+        f"/api/v1/workspaces/{workspace_id}/workflows/{workflow_data['id']}/run",
+        headers=headers,
+        json={"inputs": {"exam_file": upload.json()}},
+    )
+    assert run.status_code == 200, run.text
+    assert run.json()["status"] == "succeeded", run.text
+    output_file = run.json()["outputs"]["file"]
+    downloaded = client.get(output_file["download_url"], headers=headers)
+    assert downloaded.status_code == 200, downloaded.text
+    with zipfile.ZipFile(io.BytesIO(downloaded.content)) as package:
+        assert b"Answer Reading: " in package.read("word/document.xml")
+
+    published = client.post(
+        f"/api/v1/workspaces/{workspace_id}/workflows/{workflow_data['id']}/publish",
+        headers=headers,
+        json={"change_note": "Public exam form", "access": "public"},
+    )
+    assert published.status_code == 200, published.text
+    public_upload = client.post(
+        f"/v1/apps/{workflow_data['slug']}/files",
+        files={"file": ("exam.docx", document.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+    )
+    assert public_upload.status_code == 201, public_upload.text
+    public_run = client.post(
+        f"/v1/apps/{workflow_data['slug']}/form",
+        json={"inputs": {"exam_file": public_upload.json()}},
+    )
+    assert public_run.status_code == 200, public_run.text
+    public_result = client.get(
+        f"/v1/apps/{workflow_data['slug']}/runs/{public_run.json()['run_id']}"
+    )
+    assert public_result.status_code == 200, public_result.text
+    public_file = public_result.json()["outputs"]["file"]
+    public_download = client.get(public_file["download_url"])
+    assert public_download.status_code == 200, public_download.text
+    assert public_download.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )

@@ -26,7 +26,7 @@ async function submit() {
 
 <template>
   <div class="relative flex min-h-screen items-center justify-center overflow-hidden bg-[var(--app-bg)] p-6">
-    <div class="absolute left-6 top-5 flex items-center gap-2 text-lg font-bold"><span class="flex h-8 w-8 items-center justify-center rounded-xl bg-[var(--primary)] text-white">W</span>WeaveRun</div>
+    <div class="absolute left-6 top-5 flex items-center gap-2 text-lg font-bold"><span class="flex h-8 w-8 items-center justify-center rounded-xl bg-[var(--primary)] text-white">O</span>Ordo</div>
     <div class="absolute right-6 top-5 flex gap-1"><Button data-testid="locale-toggle" :aria-label="preferences.locale === 'zh' ? 'Switch to English' : '切换到中文'" variant="ghost" class="!w-9 !px-0" @click="preferences.setLocale(preferences.locale === 'zh' ? 'en' : 'zh')"><Languages :size="17" /></Button><Button data-testid="theme-toggle" :aria-label="preferences.isDark ? t('common.light') : t('common.dark')" variant="ghost" class="!w-9 !px-0" @click="preferences.setTheme(preferences.isDark ? 'light' : 'dark')"><Sun v-if="preferences.isDark" :size="17" /><Moon v-else :size="17" /></Button></div>
     <div class="absolute -left-32 top-1/3 h-96 w-96 rounded-full bg-blue-300/20 blur-3xl"></div><div class="absolute -right-20 bottom-0 h-96 w-96 rounded-full bg-violet-300/20 blur-3xl"></div>
     <form class="surface relative w-full max-w-md rounded-2xl p-8 shadow-xl shadow-slate-900/5" @submit.prevent="submit">
