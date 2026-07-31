@@ -54,10 +54,35 @@ async function downloadFile(file: WorkflowFileOutput) {
       <div v-for="file in files" :key="file.id" class="flex items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)] p-3">
         <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-white text-rose-600 shadow-sm dark:bg-slate-900"><FileText :size="18" /></span>
         <div class="min-w-0 flex-1"><div class="truncate text-xs font-semibold">{{ file.filename }}</div><div class="muted mt-1 text-[10px]">{{ readableSize(file.size) }} · DOCX</div></div>
-        <button type="button" class="icon-button" :disabled="downloading === file.id" :title="$t('common.download')" :aria-label="$t('common.download')" @click="downloadFile(file)"><Download :size="16" /></button>
+        <button type="button" class="workflow-file-download" :disabled="downloading === file.id" :title="$t('common.download')" :aria-label="$t('common.download')" @click="downloadFile(file)"><Download :size="16" /></button>
       </div>
       <p v-if="downloadError" class="text-xs text-red-600" role="alert">{{ downloadError }}</p>
     </div>
     <pre class="overflow-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-4 text-[11px] leading-5 text-slate-100">{{ formatted }}</pre>
   </div>
 </template>
+
+<style scoped>
+.workflow-file-download {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.workflow-file-download:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  color: var(--text);
+}
+
+.workflow-file-download:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+</style>
