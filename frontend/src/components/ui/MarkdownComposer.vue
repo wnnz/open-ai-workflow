@@ -60,7 +60,7 @@ function onKeydown(event: KeyboardEvent) {
 </script>
 
 <template>
-  <div class="markdown-composer overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--panel)] focus-within:border-[var(--primary)] focus-within:ring-2 focus-within:ring-[var(--primary-soft)]">
+  <div class="markdown-composer overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--input-bg)] focus-within:border-[var(--primary)] focus-within:ring-2 focus-within:ring-[var(--primary-soft)]">
     <div class="flex h-9 items-center gap-0.5 border-b border-[var(--border)] bg-[var(--panel-subtle)] px-2">
       <button type="button" class="format-button" :aria-label="$t('common.markdownBold')" :title="$t('common.markdownBold')" @click="replaceSelection('**', '**', $t('common.boldText'))"><Bold :size="14" /></button>
       <button type="button" class="format-button" :aria-label="$t('common.markdownItalic')" :title="$t('common.markdownItalic')" @click="replaceSelection('*', '*', $t('common.italicText'))"><Italic :size="14" /></button>

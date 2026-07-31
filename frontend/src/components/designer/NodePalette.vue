@@ -53,7 +53,7 @@ function onSearchKeydown(event: KeyboardEvent) {
       <button v-for="tab in tabs" :key="tab" type="button" class="h-9 border-b-2 px-2 text-[11px] font-semibold" :class="activeTab === tab ? 'border-[var(--primary)] text-[var(--primary)]' : 'border-transparent text-[var(--muted)]'" @click="emit('update:activeTab', tab)">{{ t(`designer.paletteTabs.${tab}`) }}</button>
     </div>
     <div class="shrink-0 border-b border-[var(--border)] p-2">
-      <label class="flex h-8 items-center gap-2 rounded-md bg-[var(--panel-subtle)] px-2"><Search :size="14" class="muted" /><input ref="searchInput" :value="query" class="min-w-0 flex-1 bg-transparent text-xs outline-none" :placeholder="activeTab === 'snippets' ? t('designer.searchSnippets') : t('designer.searchNodes')" @input="emit('update:query', ($event.target as HTMLInputElement).value)" @keydown="onSearchKeydown" /></label>
+      <label class="flex h-8 items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--input-bg)] px-2"><Search :size="14" class="muted" /><input ref="searchInput" :value="query" class="min-w-0 flex-1 bg-transparent text-xs outline-none" :placeholder="activeTab === 'snippets' ? t('designer.searchSnippets') : t('designer.searchNodes')" @input="emit('update:query', ($event.target as HTMLInputElement).value)" @keydown="onSearchKeydown" /></label>
     </div>
     <div class="min-h-0 flex-1 overflow-y-auto p-2">
       <template v-if="activeTab !== 'snippets'">

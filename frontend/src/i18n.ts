@@ -984,6 +984,8 @@ export const messages = {
     },
     publicApp: {
       chooseFile: "点击选择文件",
+      fileTooLarge: "文件过大，最大支持 50 MB。",
+      uploadFailed: "文件上传失败，请重试。",
       signedInAs: "当前用户：{name}",
       protectedTitle: "此应用受保护",
       protectedHint: "请使用已授权账号登录，或输入发布者提供的访问密码。",
@@ -1999,6 +2001,8 @@ export const messages = {
     },
     publicApp: {
       chooseFile: "Click to choose files",
+      fileTooLarge: "The file is too large. The maximum supported size is 50 MB.",
+      uploadFailed: "File upload failed. Please try again.",
       signedInAs: "Signed in as {name}",
       protectedTitle: "This app is protected",
       protectedHint: "Sign in with an authorized account or enter an access password from the publisher.",

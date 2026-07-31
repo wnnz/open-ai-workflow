@@ -157,11 +157,18 @@ async function load() {
   } catch (cause: any) { error.value = cause.response?.data?.detail || String(cause) }
 }
 
+function uploadErrorMessage(cause: any) {
+  if (cause.response?.status === 413) return t('publicApp.fileTooLarge')
+  const detail = cause.response?.data?.detail
+  return typeof detail === 'string' && detail.trim() ? detail : t('publicApp.uploadFailed')
+}
+
 async function upload(field: any, event: Event) {
   const input = event.target as HTMLInputElement
   const files = Array.from(input.files || [])
   if (!files.length) return
   loading.value = true
+  error.value = ''
   try {
     const uploaded = []
     for (const file of files) {
@@ -170,8 +177,8 @@ async function upload(field: any, event: Event) {
       uploaded.push((await axios.post(`/v1/apps/${slug}/files`, data, { headers: headers() })).data)
     }
     values.value[field.name] = field.type === 'files' ? uploaded : uploaded[0]
-  } catch (cause: any) { error.value = cause.response?.data?.detail || String(cause) }
-  finally { loading.value = false }
+  } catch (cause: any) { error.value = uploadErrorMessage(cause) }
+  finally { input.value = ''; loading.value = false }
 }
 
 async function run() {

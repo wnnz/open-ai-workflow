@@ -180,7 +180,7 @@ defineExpose({
     <textarea
       v-if="multiline"
       ref="field"
-      class="variable-control"
+      class="variable-control bg-[var(--input-bg)]"
       :class="controlClass"
       :rows="rows"
       :value="modelValue"
@@ -197,7 +197,7 @@ defineExpose({
     <input
       v-else
       ref="field"
-      class="variable-control h-9"
+      class="variable-control h-9 bg-[var(--input-bg)]"
       :class="controlClass"
       :value="modelValue"
       :placeholder="placeholder"
@@ -235,7 +235,7 @@ defineExpose({
 
 <style scoped>
 .variable-field { position: relative; }
-.variable-control { width: 100%; resize: vertical; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-subtle); padding: 8px 36px 8px 10px; color: var(--text); font-size: 12px; outline: none; }
+.variable-control { width: 100%; resize: vertical; border: 1px solid var(--border); border-radius: 7px; padding: 8px 36px 8px 10px; color: var(--text); font-size: 12px; outline: none; }
 .variable-control:focus { border-color: var(--primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary), transparent 82%); }
 .variable-trigger { position: absolute; right: 7px; top: 7px; display: flex; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 6px; background: var(--panel); color: var(--primary); box-shadow: 0 1px 4px rgb(16 24 40 / 10%); }
 .variable-trigger:hover { background: var(--primary-soft); }

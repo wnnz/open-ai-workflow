@@ -43,7 +43,12 @@ function mountPage() {
           emits: ['update:modelValue'],
           template: '<input :type="$attrs.type" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
         },
-        WorkflowInputField: { template: '<input />' },
+        WorkflowInputField: {
+          name: 'WorkflowInputField',
+          props: ['modelValue'],
+          emits: ['file-change'],
+          template: '<input data-testid="workflow-input" />',
+        },
         WorkflowOutputRenderer: { props: ['output'], template: '<div data-testid="output">{{ JSON.stringify(output) }}</div>' },
       },
     },
@@ -88,6 +93,48 @@ describe('PublicAppPage', () => {
 
     expect(axios.get).toHaveBeenLastCalledWith('/v1/apps/image-app/runs/run-1', { headers: {} })
     expect(wrapper.get('[data-testid="output"]').text()).toContain('image-1')
+  })
+
+  it('keeps the existing file and allows retry after a replacement is too large', async () => {
+    const fileApplication = {
+      ...application,
+      input_fields: [{ name: 'document', type: 'file', required: true }],
+    }
+    const existingFile = { id: 'file-old', filename: 'old.docx', content_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: 512 }
+    const replacementFile = { id: 'file-new', filename: 'replacement.docx', content_type: existingFile.content_type, size: 1_922_278 }
+    vi.mocked(axios.get).mockResolvedValueOnce({ data: fileApplication })
+    vi.mocked(axios.post)
+      .mockResolvedValueOnce({ data: existingFile })
+      .mockRejectedValueOnce({ response: { status: 413, data: '<html>Request Entity Too Large</html>' } })
+      .mockResolvedValueOnce({ data: replacementFile })
+
+    const wrapper = mountPage()
+    await flushPromises()
+    const field = wrapper.findComponent({ name: 'WorkflowInputField' })
+    const oldPicker = { files: [new File(['old'], 'old.docx')], value: 'C:\\fakepath\\old.docx' }
+    field.vm.$emit('file-change', { target: oldPicker })
+    await flushPromises()
+
+    expect(oldPicker.value).toBe('')
+    expect(wrapper.findComponent({ name: 'WorkflowInputField' }).props('modelValue')).toEqual(existingFile)
+
+    const replacement = new File(['replacement'], 'replacement.docx')
+    const rejectedPicker = { files: [replacement], value: 'C:\\fakepath\\replacement.docx' }
+    field.vm.$emit('file-change', { target: rejectedPicker })
+    await flushPromises()
+
+    expect(rejectedPicker.value).toBe('')
+    expect(wrapper.findComponent({ name: 'WorkflowInputField' }).props('modelValue')).toEqual(existingFile)
+    expect(wrapper.get('[role="alert"]').text()).toContain('publicApp.fileTooLarge')
+    expect(wrapper.text()).not.toContain('AxiosError')
+
+    const retryPicker = { files: [replacement], value: 'C:\\fakepath\\replacement.docx' }
+    field.vm.$emit('file-change', { target: retryPicker })
+    await flushPromises()
+
+    expect(retryPicker.value).toBe('')
+    expect(wrapper.findComponent({ name: 'WorkflowInputField' }).props('modelValue')).toEqual(replacementFile)
+    expect(wrapper.text()).not.toContain('publicApp.fileTooLarge')
   })
 
   it('restores the last public run after a refresh', async () => {

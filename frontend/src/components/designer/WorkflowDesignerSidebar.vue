@@ -88,7 +88,7 @@ const navigation: Array<{ id: DesignerSection; icon: typeof Sparkles; label: str
       <div class="flex items-center gap-3">
         <span class="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-50 text-violet-600 dark:bg-violet-950/40"><ListTree :size="20" /></span>
         <div class="min-w-0 flex-1">
-          <input v-if="renaming" ref="nameInput" v-model="draftName" class="h-7 w-full rounded-md border border-[var(--primary)] bg-[var(--panel)] px-2 text-sm font-semibold outline-none" :aria-label="t('designer.renameWorkflow')" maxlength="120" @keydown.enter.prevent="commitRename" @keydown.escape.prevent="cancelRename" @blur="commitRename" />
+          <input v-if="renaming" ref="nameInput" v-model="draftName" class="h-7 w-full rounded-md border border-[var(--primary)] bg-[var(--input-bg)] px-2 text-sm font-semibold outline-none" :aria-label="t('designer.renameWorkflow')" maxlength="120" @keydown.enter.prevent="commitRename" @keydown.escape.prevent="cancelRename" @blur="commitRename" />
           <button v-else type="button" class="group flex max-w-full items-center gap-1 text-left" :title="t('designer.renameWorkflow')" @click="startRename"><span class="truncate text-sm font-semibold">{{ workflowName }}</span><Pencil class="muted shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" :size="12" /></button>
           <div class="muted mt-0.5 text-[11px]">{{ t('studio.workflow') }}</div>
         </div>

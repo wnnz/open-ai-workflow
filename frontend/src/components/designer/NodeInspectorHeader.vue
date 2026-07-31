@@ -56,7 +56,7 @@ function nodeAction(action: NodeAction) {
 .node-title-input { display: block; width: 100%; border: 0; background: transparent; padding: 0; color: var(--text); font-size: 14px; font-weight: 650; line-height: 20px; outline: none; }
 .node-title-input:focus { color: var(--primary); }
 .node-description-input { display: block; width: 100%; border: 0; border-radius: 6px; background: transparent; padding: 5px 7px; color: var(--muted); font-size: 11px; outline: none; }
-.node-description-input:hover, .node-description-input:focus { background: var(--panel-subtle); color: var(--text); }
+.node-description-input:hover, .node-description-input:focus { background: var(--input-bg); color: var(--text); }
 .node-type-icon { display: flex; width: 32px; height: 32px; flex: none; align-items: center; justify-content: center; border-radius: 8px; background: color-mix(in srgb, var(--node-color), transparent 88%); color: var(--node-color); }
 .tone-blue { --node-color: #155eef; }.tone-slate { --node-color: #667085; }.tone-violet { --node-color: #7f56d9; }.tone-emerald { --node-color: #079455; }.tone-sky { --node-color: #026aa2; }.tone-indigo { --node-color: #444ce7; }.tone-amber { --node-color: #dc6803; }.tone-cyan { --node-color: #088ab2; }.tone-orange { --node-color: #e04f16; }.tone-rose { --node-color: #e31b54; }
 </style>
