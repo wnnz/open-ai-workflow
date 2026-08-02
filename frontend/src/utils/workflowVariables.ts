@@ -1,5 +1,6 @@
 import type { WorkflowEdgeLike, WorkflowNodeLike } from './workflowGraph'
 import { nodeReferenceName } from './workflowNodeNames'
+import { workflowTypeForScriptSchema } from './scriptSchema'
 
 export type WorkflowVariable = {
   path: string
@@ -26,7 +27,6 @@ export function getNodeOutputVariables(node: WorkflowNodeLike): WorkflowVariable
     image: [['images', 'Array[File]'], ['count', 'Number'], ['size', 'String'], ['model', 'String']],
     agent: [['text', 'String'], ['tool_calls', 'Array']],
     classifier: [['class_id', 'String'], ['class_name', 'String'], ['confidence', 'Number'], ['fallback', 'Boolean']],
-    script: [['output', 'Object'], ['files', 'Array[File]']],
     template: [['text', 'String']],
     json: [['value', 'Object']],
     list: [['items', 'Array'], ['item', 'Any']],
@@ -38,6 +38,7 @@ export function getNodeOutputVariables(node: WorkflowNodeLike): WorkflowVariable
     wait: [['completed', 'Boolean'], ['mode', 'String']],
     delay: [['completed_at', 'String']],
     subworkflow: [['output', 'Object']],
+    answer_filler: [['file', 'File'], ['inserted_count', 'Number'], ['requested_count', 'Number'], ['insertions', 'Array[Object]']],
   }
 
   const withErrorVariables = (variables: WorkflowVariable[]) => {
@@ -51,7 +52,6 @@ export function getNodeOutputVariables(node: WorkflowNodeLike): WorkflowVariable
   if (type === 'document') {
     const outputs: Record<string, Array<[string, string]>> = {
       extract: [['content', 'String'], ['tables', 'Array[Object]'], ['images', 'Array[File]']],
-      fill_answers: [['file', 'File'], ['inserted_count', 'Number'], ['requested_count', 'Number'], ['insertions', 'Array[Object]']],
     }
     return withErrorVariables((outputs[config.operation || 'extract'] || outputs.extract).map(([label, variableType]) => ({ path: `${prefix}.${label}`, label, type: variableType })))
   }
@@ -77,6 +77,18 @@ export function getNodeOutputVariables(node: WorkflowNodeLike): WorkflowVariable
     const outputs = (config.outputs || []).filter((item: any) => item?.name).map((item: any) => ({ path: `${prefix}.${item.name}`, label: item.name, type: item.type || 'Any' }))
     return withErrorVariables([
       ...outputs,
+      { path: `${prefix}._logs`, label: '_logs', type: 'Array[String]' },
+      { path: `${prefix}._elapsed_ms`, label: '_elapsed_ms', type: 'Number' },
+    ])
+  }
+  if (type === 'script') {
+    const properties = config.output_schema?.properties || {}
+    return withErrorVariables([
+      ...Object.entries(properties).map(([name, schema]) => ({
+        path: `${prefix}.${name}`,
+        label: name,
+        type: workflowTypeForScriptSchema(schema as Record<string, any>),
+      })),
       { path: `${prefix}._logs`, label: '_logs', type: 'Array[String]' },
       { path: `${prefix}._elapsed_ms`, label: '_elapsed_ms', type: 'Number' },
     ])

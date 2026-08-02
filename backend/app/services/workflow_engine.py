@@ -19,6 +19,7 @@ from jinja2 import StrictUndefined, TemplateError
 from jinja2.sandbox import SandboxedEnvironment
 
 from app.core.config import get_settings
+from app.services.answer_filling import fill_docx_answers
 from app.services.document_processing import execute_document
 from app.services.model_execution import (
     execute_agent,
@@ -26,6 +27,7 @@ from app.services.model_execution import (
     execute_image_generation,
     execute_llm,
 )
+from app.services.sandbox_artifacts import consume_sandbox_artifacts, sandbox_schema_value
 from app.services.scripts import validate_inputs, validate_script
 from app.services.workflow_node_registry import execute_registered_node
 from app.services.workflow_values import (
@@ -37,7 +39,7 @@ VARIABLE = re.compile(r"\{\{\s*([^{}\r\n]+?)\s*\}\}")
 EXECUTION_POLICY_NODE_TYPES = {
     "llm", "image", "agent", "code", "script", "template", "variable", "json", "aggregate",
     "extract", "list", "http", "iteration", "loop",
-    "delay", "subworkflow", "document",
+    "delay", "subworkflow", "document", "answer_filler",
 }
 
 
@@ -146,6 +148,8 @@ def validate_graph(graph: dict[str, Any]) -> None:
         validate_http_config(http_node.get("data", {}).get("config", {}))
     for document_node in (node for node in nodes if node.get("type") == "document"):
         validate_document_config(document_node.get("data", {}).get("config", {}))
+    for answer_filler_node in (node for node in nodes if node.get("type") == "answer_filler"):
+        validate_answer_filler_config(answer_filler_node.get("data", {}).get("config", {}))
     for template_node in (node for node in nodes if node.get("type") == "template"):
         validate_template_config(template_node.get("data", {}).get("config", {}))
     for aggregate_node in (node for node in nodes if node.get("type") == "aggregate"):
@@ -733,6 +737,13 @@ def validate_document_config(config: dict[str, Any]) -> None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Document answer plan is required")
 
 
+def validate_answer_filler_config(config: dict[str, Any]) -> None:
+    if not isinstance(config.get("source"), str) or not config["source"].strip():
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Answer filler source file is required")
+    if not isinstance(config.get("answers"), str) or not config["answers"].strip():
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Answer filler plan is required")
+
+
 def validate_execution_policy(config: dict[str, Any]) -> None:
     retry = config.get("retry", {"enabled": False})
     if not isinstance(retry, dict):
@@ -826,6 +837,7 @@ TRACE_INPUT_KEYS: dict[str, tuple[str, ...]] = {
     "delay": ("seconds",),
     "subworkflow": ("workflow_id", "inputs"),
     "document": ("operation", "source", "answers", "extract_mode", "output_name"),
+    "answer_filler": ("source", "answers", "output_name"),
 }
 
 
@@ -1409,6 +1421,12 @@ def execute_node(node: dict[str, Any], context: dict[str, Any]) -> Any:
         return execute_http_request(config)
     if node_type == "document":
         return execute_document(config)
+    if node_type == "answer_filler":
+        return fill_docx_answers(
+            config.get("source"),
+            config.get("answers"),
+            output_name=str(config.get("output_name") or ""),
+        )
     if node_type == "subworkflow":
         child_graph = raw_config.get("_resolved_graph")
         if not isinstance(child_graph, dict):
@@ -1513,9 +1531,10 @@ def execute_sandbox(
     if result.get("status") != "succeeded":
         error = str(result.get("error") or "Python execution failed")
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, error[-4000:])
-    sandbox_outputs = result.get("outputs")
-    if not isinstance(sandbox_outputs, dict):
+    raw_outputs = result.get("outputs")
+    if not isinstance(raw_outputs, dict):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Python entrypoint must return an object")
+    sandbox_outputs = consume_sandbox_artifacts(raw_outputs)
     sandbox_outputs["_logs"] = result.get("logs", [])
     sandbox_outputs["_elapsed_ms"] = result.get("elapsed_ms", 0)
     return sandbox_outputs
@@ -1555,7 +1574,7 @@ def execute_script_runtime(runtime: dict[str, Any], inputs: dict[str, Any]) -> d
     clean_outputs = {key: value for key, value in outputs.items() if not key.startswith("_")}
     output_schema = runtime.get("output_schema", {})
     if isinstance(output_schema, dict) and output_schema:
-        validate_inputs(output_schema, clean_outputs)
+        validate_inputs(output_schema, sandbox_schema_value(clean_outputs))
     return outputs
 
 

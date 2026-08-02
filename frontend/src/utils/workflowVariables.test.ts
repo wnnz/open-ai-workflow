@@ -88,16 +88,17 @@ describe('workflow variable catalog', () => {
     ]))
   })
 
-  it('exposes operation-specific document outputs', () => {
-    const document = (operation: string) => ({ id: 'document-1', type: 'document', position: { x: 0, y: 0 }, data: { nodeType: 'document', config: { operation } } })
-    expect(getNodeOutputVariables(document('extract'))).toEqual(expect.arrayContaining([
+  it('exposes separate document extraction and answer-filler outputs', () => {
+    const document = { id: 'document-1', type: 'document', position: { x: 0, y: 0 }, data: { nodeType: 'document', config: { operation: 'extract' } } }
+    const answerFiller = { id: 'answer-filler-1', type: 'answer_filler', position: { x: 0, y: 0 }, data: { nodeType: 'answer_filler', config: {} } }
+    expect(getNodeOutputVariables(document)).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: 'document-1.content', type: 'String' }),
       expect.objectContaining({ path: 'document-1.tables', type: 'Array[Object]' }),
     ]))
-    expect(getNodeOutputVariables(document('fill_answers'))).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: 'document-1.file', type: 'File' }),
-      expect.objectContaining({ path: 'document-1.inserted_count', type: 'Number' }),
-      expect.objectContaining({ path: 'document-1.insertions', type: 'Array[Object]' }),
+    expect(getNodeOutputVariables(answerFiller)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'answer-filler-1.file', type: 'File' }),
+      expect.objectContaining({ path: 'answer-filler-1.inserted_count', type: 'Number' }),
+      expect.objectContaining({ path: 'answer-filler-1.insertions', type: 'Array[Object]' }),
     ]))
   })
 
@@ -129,6 +130,35 @@ describe('workflow variable catalog', () => {
       expect.objectContaining({ path: 'code-1.score', type: 'Number' }),
       expect.objectContaining({ path: 'code-1._logs', type: 'Array[String]' }),
       expect.objectContaining({ path: 'code-1._elapsed_ms', type: 'Number' }),
+    ]))
+  })
+
+  it('derives workspace-script outputs from the selected version schema', () => {
+    const script = {
+      id: 'script-1',
+      type: 'script',
+      position: { x: 0, y: 0 },
+      data: {
+        nodeType: 'script',
+        label: '填充答案',
+        config: {
+          output_schema: {
+            type: 'object',
+            properties: {
+              file: { type: 'object', 'x-ordo-type': 'file' },
+              inserted_count: { type: 'integer' },
+              insertions: { type: 'array' },
+            },
+          },
+        },
+      },
+    }
+
+    expect(getNodeOutputVariables(script)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: '填充答案.file', type: 'File' }),
+      expect.objectContaining({ path: '填充答案.inserted_count', type: 'Number' }),
+      expect.objectContaining({ path: '填充答案.insertions', type: 'Array' }),
+      expect.objectContaining({ path: '填充答案._elapsed_ms', type: 'Number' }),
     ]))
   })
 

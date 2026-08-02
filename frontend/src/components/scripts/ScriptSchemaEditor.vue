@@ -5,6 +5,7 @@ import IconButton from '@/volt/IconButton.vue'
 import InputText from '@/volt/InputText.vue'
 import Select from '@/volt/Select.vue'
 import Textarea from '@/volt/Textarea.vue'
+import { scriptSchemaForKind, scriptSchemaKind, type ScriptSchemaKind } from '@/utils/scriptSchema'
 
 type JsonSchema = Record<string, any>
 const props = withDefaults(defineProps<{ modelValue: JsonSchema; output?: boolean }>(), { output: false })
@@ -56,6 +57,9 @@ function renameRow(oldName: string, name: string) {
 function updateRow(name: string, patch: JsonSchema) {
   commit({ ...properties.value, [name]: { ...properties.value[name], ...patch } })
 }
+function setType(name: string, kind: ScriptSchemaKind) {
+  commit({ ...properties.value, [name]: scriptSchemaForKind(kind, properties.value[name]) })
+}
 function setRequired(name: string, checked: boolean) {
   const next = new Set(required.value)
   if (checked) next.add(name)
@@ -99,9 +103,9 @@ function applyRaw() {
     <div v-else class="space-y-2">
       <div v-for="row in rows" :key="row.name" class="grid grid-cols-[120px_110px_70px_minmax(110px,.8fr)_minmax(140px,1fr)_30px] items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--panel-subtle)] p-2">
         <InputText :model-value="row.name" class="font-mono !text-xs" @change="renameRow(row.name, ($event.target as HTMLInputElement).value)" />
-        <Select :model-value="row.schema.type || 'string'" :options="['string','number','integer','boolean','object','array'].map(value => ({ label: value, value }))" @update:model-value="updateRow(row.name, { type: $event })" />
+        <Select :model-value="scriptSchemaKind(row.schema)" :options="['string','number','integer','boolean','object','array','file','files'].map(value => ({ label: value, value }))" @update:model-value="setType(row.name, $event as ScriptSchemaKind)" />
         <label class="flex items-center gap-1.5 text-xs"><input type="checkbox" :checked="required.has(row.name)" @change="setRequired(row.name, ($event.target as HTMLInputElement).checked)">{{ $t('scripts.required') }}</label>
-        <InputText :model-value="defaultText(row.schema)" :placeholder="$t('scripts.defaultValue')" @change="setDefault(row.name, row.schema, ($event.target as HTMLInputElement).value)" />
+        <InputText :model-value="defaultText(row.schema)" :disabled="['file','files'].includes(scriptSchemaKind(row.schema))" :placeholder="$t('scripts.defaultValue')" @change="setDefault(row.name, row.schema, ($event.target as HTMLInputElement).value)" />
         <InputText :model-value="row.schema.description || ''" :placeholder="$t('common.description')" @input="updateRow(row.name, { description: ($event.target as HTMLInputElement).value })" />
         <IconButton :label="$t('scripts.removeParameter')" tone="danger" size="sm" @click="removeRow(row.name)"><Trash2 :size="13" /></IconButton>
       </div>

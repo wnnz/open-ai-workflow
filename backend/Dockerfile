@@ -10,8 +10,8 @@ COPY app ./app
 COPY alembic.ini ./
 COPY alembic ./alembic
 RUN useradd --create-home --uid 10001 app \
-    && mkdir -p /data/files \
-    && chown -R app:app /app /data/files
+    && mkdir -p /data/files /data/sandbox-artifacts \
+    && chown -R app:app /app /data/files /data/sandbox-artifacts
 USER app
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

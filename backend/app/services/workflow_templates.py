@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services.english_exam_script import (
+    ENGLISH_EXAM_ANSWER_FILLER_INPUT_SCHEMA,
+    ENGLISH_EXAM_ANSWER_FILLER_NAME,
+    ENGLISH_EXAM_ANSWER_FILLER_OUTPUT_SCHEMA,
+)
+
 ENGLISH_EXAM_TEMPLATE_ID = "english_exam_answer_filler"
 
 ENGLISH_EXAM_SYSTEM_PROMPT = """你是一名专业的英语教师和文档结构分析专家。
@@ -55,7 +61,12 @@ ANSWER_PLAN_SCHEMA: dict[str, Any] = {
 
 
 def build_english_exam_graph(
-    *, provider_id: str, model: str, vision_enabled: bool
+    *,
+    provider_id: str,
+    model: str,
+    vision_enabled: bool,
+    script_id: str,
+    script_version: int | str = "latest",
 ) -> dict[str, Any]:
     policy = {
         "retry": {"enabled": False, "max_retries": 3, "interval_seconds": 0},
@@ -144,16 +155,22 @@ def build_english_exam_graph(
         },
         {
             "id": "fill-answers",
-            "type": "document",
+            "type": "script",
             "position": {"x": 1020, "y": 180},
             "data": {
                 "label": "填充答案",
                 "description": "在原试卷中按段落锚点插入红色答案",
                 "config": {
-                    "operation": "fill_answers",
-                    "source": "{{上传英语试卷.exam_file}}",
-                    "answers": "{{解析题目并作答.structured_output}}",
-                    "output_name": "英语试卷_已作答.docx",
+                    "script_id": script_id,
+                    "script_name": ENGLISH_EXAM_ANSWER_FILLER_NAME,
+                    "version": script_version,
+                    "inputs": {
+                        "source": "{{上传英语试卷.exam_file}}",
+                        "answers": "{{解析题目并作答.structured_output}}",
+                        "output_name": "英语试卷_已作答.docx",
+                    },
+                    "input_schema": ENGLISH_EXAM_ANSWER_FILLER_INPUT_SCHEMA,
+                    "output_schema": ENGLISH_EXAM_ANSWER_FILLER_OUTPUT_SCHEMA,
                     **policy,
                 },
             },

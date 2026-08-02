@@ -16,6 +16,7 @@ from app.models.entities import Workflow, WorkflowApproval, WorkflowRun, Workflo
 from app.observability import configure_logging, configure_otel, deliver_alert, record_node_event
 from app.services.model_providers import load_model_provider_runtimes
 from app.services.run_events import publish_run_event
+from app.services.sandbox_artifacts import consume_sandbox_artifacts, sandbox_schema_value
 from app.services.scheduling import next_schedule_at, schedule_inputs
 from app.services.script_runtime import hydrate_script_resources
 from app.services.script_test_events import (
@@ -51,6 +52,28 @@ def ping() -> str:
     return "pong"
 
 
+async def _materialize_script_test_files(
+    task_id: str, payload: dict, outputs: dict
+) -> dict:
+    workspace_id = str(payload.get("__ordo_workspace_id") or "")
+    created_by = str(payload.get("__ordo_created_by") or "")
+    if not workspace_id or not created_by:
+        raise ValueError("Script test context is unavailable")
+    async with SessionLocal() as db:
+        materialized, _ = await materialize_generated_files(
+            db,
+            workspace_id=workspace_id,
+            created_by=created_by,
+            outputs=outputs,
+            trace=[],
+            download_url=lambda file_id: (
+                f"/api/v1/workspaces/{workspace_id}/scripts/tests/{task_id}/files/{file_id}"
+            ),
+        )
+        await db.commit()
+        return materialized
+
+
 @celery.task(name="script.test")
 def test_script(task_id: str) -> str:
     payload = load_script_test_payload(task_id)
@@ -68,11 +91,16 @@ def test_script(task_id: str) -> str:
         "elapsed_ms": 0,
     }
     try:
+        sandbox_payload = {
+            key: value
+            for key, value in payload.items()
+            if not str(key).startswith("__ordo_")
+        }
         with httpx.Client(timeout=float(payload.get("timeout_seconds", 30)) + 10) as client:
             with client.stream(
                 "POST",
                 f"{get_settings().sandbox_url}/execute/stream",
-                json={**payload, "job_id": task_id},
+                json={**sandbox_payload, "job_id": task_id},
                 headers={"X-Sandbox-Token": get_settings().sandbox_shared_secret},
             ) as response:
                 response.raise_for_status()
@@ -87,12 +115,19 @@ def test_script(task_id: str) -> str:
                     elif event.get("type") == "result":
                         result = {key: value for key, value in event.items() if key != "type"}
         if result.get("status") == "succeeded":
-            outputs = result.get("outputs")
-            if not isinstance(outputs, dict):
+            raw_outputs = result.get("outputs")
+            if not isinstance(raw_outputs, dict):
                 raise ValueError("Python entrypoint must return an object")
+            outputs = consume_sandbox_artifacts(raw_outputs)
             output_schema = payload.get("output_schema") or {}
             if output_schema:
-                validate_inputs(output_schema, outputs)
+                validate_inputs(output_schema, sandbox_schema_value(outputs))
+            if not script_test_cancelled(task_id):
+                result["outputs"] = asyncio.run(
+                    _run_and_dispose(
+                        _materialize_script_test_files(task_id, payload, outputs)
+                    )
+                )
     except (httpx.HTTPError, ValueError, HTTPException) as exc:
         result = {
             "status": "failed",

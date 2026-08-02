@@ -6,6 +6,7 @@ import api from '@/api/client'
 import { consumeRunEvents } from '@/api/runEvents'
 import AppShell from '@/components/AppShell.vue'
 import ScriptSchemaEditor from '@/components/scripts/ScriptSchemaEditor.vue'
+import WorkflowOutputRenderer from '@/components/WorkflowOutputRenderer.vue'
 import AlertBanner from '@/components/ui/AlertBanner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ModalShell from '@/components/ui/ModalShell.vue'
@@ -18,6 +19,7 @@ import InputText from '@/volt/InputText.vue'
 import Select from '@/volt/Select.vue'
 import Textarea from '@/volt/Textarea.vue'
 import { useWorkspacesStore } from '@/stores/workspaces'
+import { scriptSchemaKind } from '@/utils/scriptSchema'
 
 const CodeEditor = defineAsyncComponent(() => import('@/components/CodeEditor.vue'))
 type JsonSchema = Record<string, any>
@@ -43,6 +45,7 @@ const testValues = ref<Record<string, any>>({})
 const testLogs = ref<string[]>([])
 const testResult = ref<any>(null)
 const testTaskId = ref('')
+const uploadingTestField = ref('')
 const versions = ref<ScriptVersion[]>([])
 const versionTotal = ref(0)
 const versionOffset = ref(0)
@@ -72,13 +75,17 @@ const editorTabs = computed(() => [
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T }
 async function load() { if (workspaces.activeId) items.value = (await api.get(`/workspaces/${workspaces.activeId}/scripts`)).data }
 async function loadTemplates() { if (workspaces.activeId) templates.value = (await api.get(`/workspaces/${workspaces.activeId}/scripts/templates`)).data }
-function applyTemplate(template: ScriptTemplate) {
+function applyTemplate(template: ScriptTemplate, useMetadata = false) {
   form.value.source_files = clone(template.source_files)
   form.value.entrypoint = template.entrypoint
   form.value.input_schema = clone(template.input_schema)
   form.value.output_schema = clone(template.output_schema)
   activeFile.value = Object.keys(template.source_files)[0] || 'main.py'
   testValues.value = clone(template.sample_inputs)
+  if (useMetadata && !selected.value) {
+    form.value.name = template.name
+    form.value.description = template.description
+  }
   activeTab.value = 'code'
 }
 function resetEditor() {
@@ -149,12 +156,36 @@ async function upload(event: Event) {
 }
 function fieldDefault(schema: JsonSchema) {
   if (schema.default !== undefined) return clone(schema.default)
+  if (scriptSchemaKind(schema) === 'file') return null
+  if (scriptSchemaKind(schema) === 'files') return []
   if (schema.type === 'boolean') return false
   if (schema.type === 'number' || schema.type === 'integer') return 0
   if (schema.type === 'array') return []
   if (schema.type === 'object') return {}
   return ''
 }
+async function uploadTestFiles(name: string, schema: JsonSchema, event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  if (!files.length) return
+  uploadingTestField.value = name
+  error.value = ''
+  try {
+    const uploaded = []
+    for (const file of files) {
+      const data = new FormData()
+      data.append('file', file)
+      uploaded.push((await api.post(`/workspaces/${workspaces.activeId}/scripts/test-files`, data)).data)
+    }
+    testValues.value[name] = scriptSchemaKind(schema) === 'files' ? uploaded : uploaded[0]
+  } catch (cause: any) { error.value = cause.response?.data?.detail || String(cause) }
+  finally { uploadingTestField.value = ''; input.value = '' }
+}
+function testFileNames(value: any) {
+  const files = Array.isArray(value) ? value : value ? [value] : []
+  return files.map(item => String(item?.filename || '')).filter(Boolean).join(', ')
+}
+function clearTestFiles(name: string) { testValues.value[name] = scriptSchemaKind(inputProperties.value[name]) === 'files' ? [] : null }
 watch(inputProperties, properties => {
   const next: Record<string, any> = {}
   for (const [name, schema] of Object.entries(properties) as Array<[string, JsonSchema]>) next[name] = testValues.value[name] ?? fieldDefault(schema)
@@ -191,24 +222,24 @@ watch(() => workspaces.activeId, () => Promise.all([load(), loadTemplates()]))
 </script>
 
 <template>
-  <AppShell><div class="px-7 py-5">
+  <AppShell><div class="px-4 py-5 sm:px-7">
     <PageHeader :title="t('scripts.title')" :subtitle="t('scripts.subtitle')"><template #actions><input ref="fileInput" type="file" class="hidden" accept=".py,.zip" @change="upload"><Button variant="secondary" :loading="saving" @click="fileInput?.click()"><Upload :size="16" />{{ t('scripts.upload') }}</Button><Button @click="newScript"><Plus :size="16" />{{ t('scripts.newScript') }}</Button></template></PageHeader>
-    <AlertBanner :message="error" tone="error" /><SearchInput v-model="search" class="mt-5 w-72" :placeholder="t('common.search')" />
+    <AlertBanner :message="error" tone="error" /><SearchInput v-model="search" class="mt-5 w-full sm:w-72" :placeholder="t('common.search')" />
     <div v-if="filtered.length" class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3"><ActionCard v-for="item in filtered" :key="item.id" class="rounded-lg p-4" @click="edit(item)"><div class="flex items-start gap-3"><span class="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40"><FileCode2 :size="20" /></span><div class="min-w-0"><h2 class="truncate font-semibold">{{ item.name }}</h2><p class="muted mt-1 line-clamp-2 text-sm">{{ item.description || 'Python · main(inputs, context)' }}</p></div></div><div class="muted mt-5 flex justify-between border-t border-[var(--border)] pt-3 text-xs"><span>{{ t('scripts.version') }} {{ item.latest_version }}</span><span>{{ item.tags?.join(', ') }}</span></div></ActionCard></div>
     <EmptyState v-else class="mt-16" :title="t('scripts.empty')"><template #icon><Braces :size="42" /></template></EmptyState>
 
-    <ModalShell v-model="showEditor" :title="selected ? t('scripts.edit') : t('scripts.newScript')" max-width="max-w-[1180px]" body-class="flex min-h-[660px] flex-col !overflow-hidden p-0" form @submit="save">
-      <div class="grid shrink-0 grid-cols-[minmax(0,1fr)_220px_260px] gap-3 border-b border-[var(--border)] p-4"><InputText v-model="form.name" :placeholder="t('scripts.name')" required /><InputText v-model="form.tagsText" :placeholder="t('scripts.tags')" /><Select :model-value="''" :placeholder="t('scripts.applyTemplate')" :options="templates.map(item => ({ label: item.name, value: item.id }))" @update:model-value="applyTemplate(templates.find(item => item.id === $event)!)" /></div>
-      <div class="flex shrink-0 border-b border-[var(--border)] px-4"><button v-for="tab in editorTabs" :key="tab.id" type="button" class="h-11 border-b-2 px-4 text-xs" :class="activeTab === tab.id ? 'border-[var(--primary)] font-semibold text-[var(--primary)]' : 'border-transparent text-[var(--muted)] hover:text-[var(--text)]'" @click="activeTab = tab.id"><span>{{ tab.label }}</span><span v-if="tab.count !== undefined" class="ml-1.5 rounded bg-[var(--panel-subtle)] px-1.5 py-0.5 text-[9px]">{{ tab.count }}</span></button></div>
+    <ModalShell v-model="showEditor" :title="selected ? t('scripts.edit') : t('scripts.newScript')" max-width="max-w-[1180px]" panel-class="h-[92vh]" body-class="flex min-h-0 flex-col !overflow-hidden p-0" form @submit="save">
+      <div class="grid shrink-0 gap-3 border-b border-[var(--border)] p-4 lg:grid-cols-[minmax(0,1fr)_220px_260px]"><InputText v-model="form.name" :placeholder="t('scripts.name')" required /><InputText v-model="form.tagsText" :placeholder="t('scripts.tags')" /><Select :model-value="''" :placeholder="t('scripts.applyTemplate')" :options="templates.map(item => ({ label: item.name, value: item.id }))" @update:model-value="applyTemplate(templates.find(item => item.id === $event)!, true)" /></div>
+      <div class="flex shrink-0 overflow-x-auto border-b border-[var(--border)] px-2 sm:px-4"><button v-for="tab in editorTabs" :key="tab.id" type="button" class="h-11 shrink-0 border-b-2 px-3 text-xs sm:px-4" :class="activeTab === tab.id ? 'border-[var(--primary)] font-semibold text-[var(--primary)]' : 'border-transparent text-[var(--muted)] hover:text-[var(--text)]'" @click="activeTab = tab.id"><span>{{ tab.label }}</span><span v-if="tab.count !== undefined" class="ml-1.5 rounded bg-[var(--panel-subtle)] px-1.5 py-0.5 text-[9px]">{{ tab.count }}</span></button></div>
       <div class="min-h-0 flex-1 overflow-y-auto">
-        <div v-if="activeTab === 'code'" class="grid h-full min-h-[550px] grid-cols-[190px_minmax(0,1fr)]">
-          <aside class="border-r border-[var(--border)] bg-[var(--panel-subtle)] p-3"><div class="mb-3 flex items-center gap-2"><InputText v-model="newFileName" class="!h-8 font-mono !text-[10px]" placeholder="helpers/text.py" @keydown.enter.prevent="addFile" /><IconButton :label="t('scripts.addFile')" size="sm" @click="addFile"><FilePlus2 :size="14" /></IconButton></div><button v-for="name in files" :key="name" type="button" class="group flex w-full items-center gap-2 rounded-md px-2 py-2 text-left font-mono text-[10px]" :class="activeFile === name ? 'bg-[var(--primary-soft)] text-[var(--primary)]' : 'hover:bg-[var(--panel)]'" @click="activeFile = name"><FileCode2 :size="13" /><span class="min-w-0 flex-1 truncate">{{ name }}</span><Trash2 v-if="files.length > 1" :size="12" class="opacity-0 group-hover:opacity-100" @click.stop="removeFile(name)" /></button></aside>
-          <section class="min-w-0 p-4"><div class="mb-3 grid grid-cols-[minmax(0,1fr)_220px] gap-3"><InputText v-model="form.description" :placeholder="t('common.description')" /><InputText v-model="form.entrypoint" class="font-mono" :placeholder="t('scripts.entrypoint')" /></div><CodeEditor v-model="activeSource" language="python" height="480px" /></section>
+        <div v-if="activeTab === 'code'" class="grid min-h-[550px] lg:h-full lg:min-h-0 lg:grid-cols-[190px_minmax(0,1fr)] lg:overflow-hidden">
+          <aside class="border-r border-[var(--border)] bg-[var(--panel-subtle)] p-3 lg:min-h-0 lg:overflow-y-auto"><div class="mb-3 flex items-center gap-2"><InputText v-model="newFileName" class="!h-8 font-mono !text-[10px]" placeholder="helpers/text.py" @keydown.enter.prevent="addFile" /><IconButton :label="t('scripts.addFile')" size="sm" @click="addFile"><FilePlus2 :size="14" /></IconButton></div><button v-for="name in files" :key="name" type="button" class="group flex w-full items-center gap-2 rounded-md px-2 py-2 text-left font-mono text-[10px]" :class="activeFile === name ? 'bg-[var(--primary-soft)] text-[var(--primary)]' : 'hover:bg-[var(--panel)]'" @click="activeFile = name"><FileCode2 :size="13" /><span class="min-w-0 flex-1 truncate">{{ name }}</span><Trash2 v-if="files.length > 1" :size="12" class="opacity-0 group-hover:opacity-100" @click.stop="removeFile(name)" /></button></aside>
+          <section class="min-w-0 p-4 lg:flex lg:min-h-0 lg:flex-col"><div class="mb-3 grid shrink-0 grid-cols-[minmax(0,1fr)_220px] gap-3"><InputText v-model="form.description" :placeholder="t('common.description')" /><InputText v-model="form.entrypoint" class="font-mono" :placeholder="t('scripts.entrypoint')" /></div><div class="h-[480px] lg:h-auto lg:min-h-0 lg:flex-1"><CodeEditor v-model="activeSource" language="python" height="100%" /></div></section>
         </div>
         <section v-else-if="activeTab === 'inputs'" class="p-5"><ScriptSchemaEditor v-model="form.input_schema" /></section>
         <section v-else-if="activeTab === 'outputs'" class="p-5"><ScriptSchemaEditor v-model="form.output_schema" output /></section>
-        <section v-else-if="activeTab === 'test'" class="grid min-h-[550px] grid-cols-[minmax(0,1fr)_minmax(0,1fr)] divide-x divide-[var(--border)]"><div class="space-y-3 p-5"><h3 class="text-sm font-semibold">{{ t('scripts.testInputs') }}</h3><label v-for="(schema, name) in inputProperties" :key="name" class="block text-xs font-semibold"><span>{{ name }}<span v-if="form.input_schema.required?.includes(name)" class="ml-1 text-red-500">*</span></span><Textarea v-if="['object','array'].includes(schema.type)" class="mt-1.5 h-24 font-mono !text-xs" :model-value="JSON.stringify(testValues[name], null, 2)" @update:model-value="setStructuredTestValue(String(name), $event)" /><label v-else-if="schema.type === 'boolean'" class="mt-2 flex items-center gap-2 font-normal"><input v-model="testValues[name]" type="checkbox">{{ schema.description }}</label><InputText v-else :model-value="testValues[name] == null ? '' : String(testValues[name])" class="mt-1.5" :type="['number','integer'].includes(schema.type) ? 'number' : 'text'" :placeholder="schema.description || String(name)" @update:model-value="setScalarTestValue(String(name), schema, $event)" /></label><p v-if="!Object.keys(inputProperties).length" class="muted py-12 text-center text-xs">{{ t('scripts.noInputs') }}</p><div class="flex gap-2"><Button type="button" :loading="testing" @click="test"><Play :size="15" />{{ t('scripts.runDraft') }}</Button><Button v-if="testing" type="button" variant="secondary" @click="cancelTest"><Square :size="14" />{{ t('common.cancel') }}</Button></div></div><div class="min-w-0 p-5"><h3 class="text-sm font-semibold">{{ t('scripts.testOutput') }}</h3><div v-if="testLogs.length" class="mt-3 max-h-48 overflow-auto rounded-lg bg-slate-950 p-3 font-mono text-[11px] text-slate-100"><div v-for="(line, index) in testLogs" :key="index">{{ line }}</div></div><pre v-if="testResult" class="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-3 text-xs text-slate-100">{{ JSON.stringify(testResult, null, 2) }}</pre><p v-else class="muted py-16 text-center text-xs">{{ testing ? t('scripts.testRunning') : t('scripts.noTestResult') }}</p></div></section>
-        <section v-else class="grid min-h-[550px] grid-cols-[360px_minmax(0,1fr)] divide-x divide-[var(--border)]"><div class="p-4"><div v-for="version in versions" :key="version.version" class="mb-2 flex items-center gap-3 rounded-lg border border-[var(--border)] p-3"><div class="min-w-0 flex-1"><div class="text-xs font-semibold">{{ t('scripts.version') }} {{ version.version }}</div><div class="muted mt-1 truncate text-[10px]">{{ version.change_note || version.entrypoint }}</div></div><Button size="sm" variant="ghost" type="button" @click="loadDiff(version.version)">{{ t('scripts.diff') }}</Button><IconButton :label="t('scripts.restore')" size="sm" @click="restoreVersion(version.version)"><RotateCcw :size="13" /></IconButton></div><div class="mt-3 flex justify-between"><Button size="sm" variant="secondary" type="button" :disabled="versionOffset === 0" @click="loadVersions(Math.max(0, versionOffset - 20))">{{ t('common.previous') }}</Button><Button size="sm" variant="secondary" type="button" :disabled="versionOffset + 20 >= versionTotal" @click="loadVersions(versionOffset + 20)">{{ t('common.next') }}</Button></div></div><pre class="min-w-0 overflow-auto whitespace-pre p-4 font-mono text-[11px]">{{ versionDiff || t('scripts.selectVersionDiff') }}</pre></section>
+        <section v-else-if="activeTab === 'test'" class="grid min-h-[550px] divide-y divide-[var(--border)] lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:divide-x lg:divide-y-0"><div class="space-y-3 p-5"><h3 class="text-sm font-semibold">{{ t('scripts.testInputs') }}</h3><label v-for="(schema, name) in inputProperties" :key="name" class="block text-xs font-semibold"><span>{{ name }}<span v-if="form.input_schema.required?.includes(name)" class="ml-1 text-red-500">*</span></span><span v-if="['file','files'].includes(scriptSchemaKind(schema))" class="mt-1.5 flex items-center gap-2"><label class="inline-flex h-9 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--input-bg)] px-3 font-normal"><Upload :size="14" class="shrink-0 text-[var(--primary)]" /><span class="min-w-0 flex-1 truncate">{{ testFileNames(testValues[name]) || t('scripts.chooseTestFile') }}</span><input class="hidden" type="file" :multiple="scriptSchemaKind(schema) === 'files'" @change="uploadTestFiles(String(name), schema, $event)"></label><IconButton v-if="testFileNames(testValues[name])" :label="t('common.clear')" tone="danger" size="sm" @click="clearTestFiles(String(name))"><Trash2 :size="13" /></IconButton></span><span v-else-if="uploadingTestField === String(name)" class="muted mt-1.5 block text-[10px]">{{ t('common.loading') }}</span><Textarea v-else-if="['object','array'].includes(schema.type)" class="mt-1.5 h-24 font-mono !text-xs" :model-value="JSON.stringify(testValues[name], null, 2)" @update:model-value="setStructuredTestValue(String(name), $event)" /><label v-else-if="schema.type === 'boolean'" class="mt-2 flex items-center gap-2 font-normal"><input v-model="testValues[name]" type="checkbox">{{ schema.description }}</label><InputText v-else :model-value="testValues[name] == null ? '' : String(testValues[name])" class="mt-1.5" :type="['number','integer'].includes(schema.type) ? 'number' : 'text'" :placeholder="schema.description || String(name)" @update:model-value="setScalarTestValue(String(name), schema, $event)" /></label><p v-if="!Object.keys(inputProperties).length" class="muted py-12 text-center text-xs">{{ t('scripts.noInputs') }}</p><div class="flex gap-2"><Button type="button" :loading="testing" @click="test"><Play :size="15" />{{ t('scripts.runDraft') }}</Button><Button v-if="testing" type="button" variant="secondary" @click="cancelTest"><Square :size="14" />{{ t('common.cancel') }}</Button></div></div><div class="min-w-0 p-5"><h3 class="text-sm font-semibold">{{ t('scripts.testOutput') }}</h3><div v-if="testLogs.length" class="mt-3 max-h-48 overflow-auto rounded-lg bg-slate-950 p-3 font-mono text-[11px] text-slate-100"><div v-for="(line, index) in testLogs" :key="index">{{ line }}</div></div><WorkflowOutputRenderer v-if="testResult?.status === 'succeeded'" class="mt-3" :output="testResult.outputs" /><pre v-else-if="testResult" class="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-3 text-xs text-slate-100">{{ JSON.stringify(testResult, null, 2) }}</pre><p v-else class="muted py-16 text-center text-xs">{{ testing ? t('scripts.testRunning') : t('scripts.noTestResult') }}</p></div></section>
+        <section v-else class="grid min-h-[550px] divide-y divide-[var(--border)] lg:grid-cols-[360px_minmax(0,1fr)] lg:divide-x lg:divide-y-0"><div class="p-4"><div v-for="version in versions" :key="version.version" class="mb-2 flex items-center gap-3 rounded-lg border border-[var(--border)] p-3"><div class="min-w-0 flex-1"><div class="text-xs font-semibold">{{ t('scripts.version') }} {{ version.version }}</div><div class="muted mt-1 truncate text-[10px]">{{ version.change_note || version.entrypoint }}</div></div><Button size="sm" variant="ghost" type="button" @click="loadDiff(version.version)">{{ t('scripts.diff') }}</Button><IconButton :label="t('scripts.restore')" size="sm" @click="restoreVersion(version.version)"><RotateCcw :size="13" /></IconButton></div><div class="mt-3 flex justify-between"><Button size="sm" variant="secondary" type="button" :disabled="versionOffset === 0" @click="loadVersions(Math.max(0, versionOffset - 20))">{{ t('common.previous') }}</Button><Button size="sm" variant="secondary" type="button" :disabled="versionOffset + 20 >= versionTotal" @click="loadVersions(versionOffset + 20)">{{ t('common.next') }}</Button></div></div><pre class="min-w-0 overflow-auto whitespace-pre p-4 font-mono text-[11px]">{{ versionDiff || t('scripts.selectVersionDiff') }}</pre></section>
       </div>
       <template #footer><Button v-if="selected" class="mr-auto" type="button" variant="danger" @click="remove"><Trash2 :size="15" />{{ t('common.delete') }}</Button><InputText v-model="form.change_note" class="mr-2 max-w-sm" :placeholder="t('scripts.changeNote')" /><Button type="button" variant="secondary" @click="showEditor = false">{{ t('common.cancel') }}</Button><Button type="submit" :loading="saving">{{ t('common.save') }}</Button></template>
     </ModalShell>

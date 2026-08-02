@@ -39,6 +39,7 @@ from app.schemas.workflow import (
     WorkflowUpdate,
     WorkflowVersionOut,
 )
+from app.services.builtin_scripts import ensure_english_exam_answer_filler_script
 from app.services.model_providers import load_model_provider_runtimes
 from app.services.run_events import stream_run_events
 from app.services.scheduling import next_schedule_at
@@ -221,11 +222,29 @@ async def create_workflow(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "Configure a model provider before creating the English exam workflow",
             )
+        answer_filler_script, script_created = (
+            await ensure_english_exam_answer_filler_script(
+                db,
+                workspace_id=workspace_id,
+                created_by=user.id,
+            )
+        )
+        if script_created:
+            db.add(
+                audit(
+                    workspace_id,
+                    user.id,
+                    "script.installed",
+                    "script",
+                    answer_filler_script.id,
+                )
+            )
         capabilities = provider.config.get("capabilities", {}) if isinstance(provider.config, dict) else {}
         graph = build_english_exam_graph(
             provider_id=provider.id,
             model=provider.default_model,
             vision_enabled=bool(capabilities.get("vision", False)),
+            script_id=answer_filler_script.id,
         )
         validate_graph(graph)
         app_type = "workflow"

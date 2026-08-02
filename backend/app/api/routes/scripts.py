@@ -8,19 +8,20 @@ from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentUser, DbSession
 from app.celery_app import celery
 from app.core.config import get_settings
-from app.models.entities import Script, ScriptVersion
+from app.models.entities import Script, ScriptVersion, StoredFile
 from app.schemas.common import MessageOut
 from app.schemas.script import (
     ScriptCreate,
     ScriptDiffOut,
     ScriptDraftTestIn,
+    ScriptFileOut,
     ScriptOut,
     ScriptRestoreIn,
     ScriptTemplateOut,
@@ -45,6 +46,9 @@ from app.services.scripts import (
     validate_inputs,
     validate_script,
 )
+from app.services.storage import object_path
+from app.services.uploads import store_upload
+from app.services.workflow_files import contains_file_id, hydrate_file_references
 from app.services.workspaces import audit, require_role, slugify
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/scripts", tags=["scripts"])
@@ -139,8 +143,39 @@ async def script_templates(
     return list_script_templates()
 
 
+@router.post("/test-files", response_model=ScriptFileOut, status_code=status.HTTP_201_CREATED)
+async def upload_script_test_file(
+    workspace_id: str,
+    db: DbSession,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+) -> StoredFile:
+    await require_role(db, workspace_id, user.id, "editor")
+    key, digest, size = await store_upload(
+        workspace_id, file, get_settings().max_upload_bytes
+    )
+    stored = StoredFile(
+        workspace_id=workspace_id,
+        object_key=key,
+        filename=file.filename or "file",
+        content_type=file.content_type or "application/octet-stream",
+        size=size,
+        sha256=digest,
+        created_by=user.id,
+    )
+    db.add(stored)
+    await db.flush()
+    db.add(audit(workspace_id, user.id, "script.test_file_uploaded", "file", stored.id))
+    await db.commit()
+    await db.refresh(stored)
+    return stored
+
+
 async def build_test_payload(
-    db: DbSession, payload: ScriptDraftTestIn, script: Script | None = None
+    db: DbSession,
+    workspace_id: str,
+    payload: ScriptDraftTestIn,
+    script: Script | None = None,
 ) -> dict:
     version = None
     if script:
@@ -170,13 +205,14 @@ async def build_test_payload(
     files = normalize_source_files(source, source_files)
     validate_script(source, entrypoint, input_schema, output_schema, files)
     validate_inputs(input_schema, payload.inputs)
+    hydrated_inputs = await hydrate_file_references(db, workspace_id, payload.inputs)
     return {
         "source": source,
         "source_files": files,
         "entrypoint": entrypoint,
         "input_schema": input_schema,
         "output_schema": output_schema,
-        "inputs": payload.inputs,
+        "inputs": hydrated_inputs,
         "timeout_seconds": payload.timeout_seconds,
         "memory_mb": payload.memory_mb,
         "network_enabled": payload.network_enabled,
@@ -187,9 +223,19 @@ async def enqueue_script_test(
     workspace_id: str,
     script_id: str | None,
     task_payload: dict,
+    created_by: str,
 ) -> ScriptTestTaskOut:
     task_id = str(uuid4())
-    create_script_test(task_id, workspace_id, script_id, task_payload)
+    create_script_test(
+        task_id,
+        workspace_id,
+        script_id,
+        {
+            **task_payload,
+            "__ordo_workspace_id": workspace_id,
+            "__ordo_created_by": created_by,
+        },
+    )
     celery.send_task("script.test", args=[task_id], task_id=task_id)
     return ScriptTestTaskOut(task_id=task_id, status="pending")
 
@@ -199,7 +245,12 @@ async def test_script_draft(
     workspace_id: str, payload: ScriptDraftTestIn, db: DbSession, user: CurrentUser
 ) -> ScriptTestTaskOut:
     await require_role(db, workspace_id, user.id, "editor")
-    return await enqueue_script_test(workspace_id, None, await build_test_payload(db, payload))
+    return await enqueue_script_test(
+        workspace_id,
+        None,
+        await build_test_payload(db, workspace_id, payload),
+        user.id,
+    )
 
 
 def require_test(workspace_id: str, task_id: str) -> dict:
@@ -207,6 +258,28 @@ def require_test(workspace_id: str, task_id: str) -> dict:
     if not task or task.get("workspace_id") != workspace_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Script test not found")
     return task
+
+
+@router.get("/tests/{task_id}/files/{file_id}")
+async def download_script_test_file(
+    workspace_id: str,
+    task_id: str,
+    file_id: str,
+    db: DbSession,
+    user: CurrentUser,
+) -> FileResponse:
+    await require_role(db, workspace_id, user.id)
+    task = require_test(workspace_id, task_id)
+    if not contains_file_id(task.get("result") or {}, file_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "File is not part of this script test")
+    stored = await db.get(StoredFile, file_id)
+    if not stored or stored.workspace_id != workspace_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "File not found")
+    return FileResponse(
+        object_path(stored.object_key),
+        media_type=stored.content_type,
+        filename=stored.filename,
+    )
 
 
 @router.get("/tests/{task_id}")
@@ -596,7 +669,8 @@ async def test_script(
     return await enqueue_script_test(
         workspace_id,
         script_id,
-        await build_test_payload(db, payload, script),
+        await build_test_payload(db, workspace_id, payload, script),
+        user.id,
     )
 
 

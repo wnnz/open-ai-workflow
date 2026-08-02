@@ -23,12 +23,13 @@ describe('DocumentConfigPanel', () => {
     expect((wrapper.get('input.variable-control').element as HTMLInputElement).value).toBe('{{上传英语试卷.exam_file}}')
   })
 
-  it('shows source and answer-plan inputs when filling answers', () => {
-    const wrapper = mountPanel({ operation: 'fill_answers' })
+  it('does not expose workflow-specific answer filling as a document operation', () => {
+    const wrapper = mountPanel({ operation: 'extract' })
 
     expect(wrapper.text()).toContain('来源文件或变量')
-    expect(wrapper.text()).toContain('答案方案或变量')
-    expect(wrapper.findAll('input.variable-control')).toHaveLength(2)
+    expect(wrapper.text()).not.toContain('填充答案')
+    expect(wrapper.text()).not.toContain('答案方案或变量')
+    expect(wrapper.findAll('input.variable-control')).toHaveLength(1)
     expect(wrapper.find('details').exists()).toBe(false)
     expect(wrapper.findAll('[data-section-kind]').map(section => section.attributes('data-section-kind'))).toEqual(['parameters', 'input'])
   })

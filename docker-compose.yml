@@ -12,8 +12,11 @@ x-backend: &backend
     args: *build-proxy
   restart: unless-stopped
   env_file: .env
+  environment:
+    SANDBOX_ARTIFACT_PATH: /data/sandbox-artifacts
   volumes:
     - file-data:/data/files
+    - sandbox-artifacts:/data/sandbox-artifacts
   extra_hosts:
     - "host.docker.internal:host-gateway"
   depends_on:
@@ -87,6 +90,11 @@ services:
       SANDBOX_SHARED_SECRET: ${SANDBOX_SHARED_SECRET:?SANDBOX_SHARED_SECRET must be set}
       SANDBOX_RUNTIME_IMAGE: ordo-sandbox
       DOCKER_HOST: tcp://sandbox-docker-proxy:2375
+      SANDBOX_STORAGE_PATH: /data/files
+      SANDBOX_ARTIFACT_PATH: /data/sandbox-artifacts
+    volumes:
+      - file-data:/data/files:ro
+      - sandbox-artifacts:/data/sandbox-artifacts
     networks:
       - sandbox-runtime
       - sandbox-control
@@ -103,6 +111,7 @@ services:
     restart: unless-stopped
     environment:
       CONTAINERS: 1
+      EXEC: 1
       POST: 1
     volumes:
       - //var/run/docker.sock:/var/run/docker.sock:ro
@@ -135,6 +144,8 @@ volumes:
     name: ordo_redis-data
   file-data:
     name: ordo_file-data
+  sandbox-artifacts:
+    name: ordo_sandbox-artifacts
   sandbox-proxy-config:
     name: ordo_sandbox-proxy-config
 

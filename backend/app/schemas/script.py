@@ -98,6 +98,13 @@ class ScriptTestTaskOut(BaseModel):
     status: str
 
 
+class ScriptFileOut(ApiModel):
+    id: str
+    filename: str
+    content_type: str
+    size: int
+
+
 class ScriptRestoreIn(BaseModel):
     source_version: int = Field(ge=1)
     expected_version: int = Field(ge=1)

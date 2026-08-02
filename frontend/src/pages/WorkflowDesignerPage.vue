@@ -47,6 +47,7 @@ import Select from '@/volt/Select.vue'
 import Textarea from '@/volt/Textarea.vue'
 import { absoluteNodePosition, clearWorkflowEdgeSelection, containerSizeForChildren, findAvailableNodePosition, insertNodeOnEdge, isConnectionAllowed, layoutContainerChildren, layoutWorkflow, mergeWorkflowEdges, nextContainerChildPosition, removeWorkflowEdgeById, replaceWorkflowNode, validateWorkflowGraph, type WorkflowValidationIssue } from '@/utils/workflowGraph'
 import { stripRuntimeData } from '@/utils/workflowRunOverlay'
+import { migrateLegacyAnswerFillerNodes } from '@/utils/workflowNodeMigrations'
 import { allocateDefaultNodeName, ensureUniqueNodeNames, nextUniqueNodeName, nodeReferenceName, rewriteNodeReferences, validateNodeName, type NodeNameError, type NodeRename } from '@/utils/workflowNodeNames'
 import { buildAllVariableCatalog, buildVariableCatalog, readRuntimeVariable } from '@/utils/workflowVariables'
 import { normalizeWorkflowComments, type WorkflowCommentThread } from '@/types/workflowComments'
@@ -158,7 +159,7 @@ const saveState = computed<'idle' | 'dirty' | 'saving' | 'saved' | 'error' | 'co
   return lastSavedAt.value ? 'saved' : 'idle'
 })
 const localHistoryEntries = computed(() => graphHistory.value.map((state, index) => ({ state, index, time: historyTimes.value[index] })).reverse())
-const nodeTypes = { ...Object.fromEntries(['start', 'end', 'default', 'llm', 'image', 'agent', 'classifier', 'code', 'script', 'template', 'variable', 'json', 'aggregate', 'extract', 'list', 'http', 'condition', 'human', 'wait', 'delay', 'subworkflow', 'document'].map(type => [type, markRaw(WorkflowNode)])), iteration: markRaw(WorkflowContainerNode), loop: markRaw(WorkflowContainerNode), note: markRaw(WorkflowNoteNode) }
+const nodeTypes = { ...Object.fromEntries(['start', 'end', 'default', 'llm', 'image', 'agent', 'classifier', 'code', 'script', 'template', 'variable', 'json', 'aggregate', 'extract', 'list', 'http', 'condition', 'human', 'wait', 'delay', 'subworkflow', 'document', 'answer_filler'].map(type => [type, markRaw(WorkflowNode)])), iteration: markRaw(WorkflowContainerNode), loop: markRaw(WorkflowContainerNode), note: markRaw(WorkflowNoteNode) }
 const edgeTypes = { workflow: markRaw(WorkflowEdge) }
 const paletteSections = computed(() => {
   const query = paletteQuery.value.trim().toLocaleLowerCase()
@@ -308,11 +309,15 @@ async function load() {
       .filter((node: any) => String(node.data?.nodeType || node.type) === 'knowledge')
       .map((node: any) => String(node.id)),
   )
-  const draftNodes = data.draft_graph.nodes.filter((node: any) => !removedKnowledgeNodeIds.has(String(node.id)))
+  const legacyAnswerFillerMigration = migrateLegacyAnswerFillerNodes(
+    data.draft_graph.nodes.filter((node: any) => !removedKnowledgeNodeIds.has(String(node.id))),
+    scripts.value.find((script: any) => script.slug === 'english-exam-answer-filler'),
+  )
+  const draftNodes = legacyAnswerFillerMigration.nodes
   const draftStart = draftNodes.find((node: any) => String(node.data?.nodeType || node.type) === 'start')
   const draftInputFields = draftStart?.data?.config?.input_fields || []
   const localizedRenames: NodeRename[] = []
-  let loadedNodes = draftNodes.map((node: Node) => {
+  let loadedNodes = draftNodes.map(node => {
     const nodeType = String(node.data?.nodeType || node.type)
     const defaults: Record<string, string[]> = { start: ['Start', '开始'], end: ['End', '结束'] }
     const baseConfig = nodeType === 'start' ? {
@@ -343,7 +348,7 @@ async function load() {
   loadedNodes = uniqueNames.nodes
   const beforeReferenceMigration = JSON.stringify(loadedNodes.map((node: any) => node.data?.config || {}))
   loadedNodes = replaceReferences(loadedNodes, [{ from: 'inputs', to: startReferenceName(loadedNodes) }])
-  const migrated = Boolean(removedKnowledgeNodeIds.size || localizedRenames.length || uniqueNames.renames.length || beforeReferenceMigration !== JSON.stringify(loadedNodes.map((node: any) => node.data?.config || {})))
+  const migrated = Boolean(legacyAnswerFillerMigration.migrated || removedKnowledgeNodeIds.size || localizedRenames.length || uniqueNames.renames.length || beforeReferenceMigration !== JSON.stringify(loadedNodes.map((node: any) => node.data?.config || {})))
   nodes.value = loadedNodes as Node[]
   const loadedEdges = data.draft_graph.edges
     .filter((edge: Edge) => !removedKnowledgeNodeIds.has(String(edge.source)) && !removedKnowledgeNodeIds.has(String(edge.target)))
@@ -366,7 +371,14 @@ async function loadResources() {
     api.get(`/workspaces/${workspaceId.value}/workflows`),
   ])
   modelProviders.value = modelsResponse.status === 'fulfilled' ? modelsResponse.value.data : []
-  scripts.value = scriptsResponse.status === 'fulfilled' ? scriptsResponse.value.data : []
+  const scriptItems = scriptsResponse.status === 'fulfilled' ? scriptsResponse.value.data : []
+  const scriptRuntimeResults = await Promise.allSettled(scriptItems.map((script: any) => api.get(`/workspaces/${workspaceId.value}/scripts/${script.id}/versions/${script.latest_version}`)))
+  scripts.value = scriptItems.map((script: any, index: number) => {
+    const runtime = scriptRuntimeResults[index]
+    return runtime?.status === 'fulfilled'
+      ? { ...script, input_schema: runtime.value.data.input_schema, output_schema: runtime.value.data.output_schema }
+      : script
+  })
   subworkflows.value = workflowsResponse.status === 'fulfilled' ? workflowsResponse.value.data.filter((item: any) => item.id !== workflowId.value) : []
 }
 async function loadEnvironmentVariables() {
@@ -798,7 +810,7 @@ async function add(type: string, configOverride: Record<string, any> = {}) {
   return node
 }
 async function addScriptSnippet(script: any) {
-  const added = await add('script', { script_id: script.id, script_name: script.name, version: 'latest' })
+  const added = await add('script', { script_id: script.id, script_name: script.name, version: 'latest', input_schema: JSON.parse(JSON.stringify(script.input_schema || { type: 'object', properties: {} })), output_schema: JSON.parse(JSON.stringify(script.output_schema || { type: 'object', properties: {} })) })
   if (!added) return
   updateSelectedNodeLabel(nextUniqueNodeName(nodes.value as any[], script.name, [added.id]))
 }
@@ -1129,13 +1141,14 @@ watch(() => (nodes.value as any[]).map(node => node.id).join(','), () => {
 watch(() => JSON.stringify(selected.value?.data?.config || {}), () => { if (!configEditing.value) syncConfigEditor(); if (selectedType.value === 'classifier') syncClassifierEdgeLabels() })
 watch(() => validationIssues.value.map(issue => `${issue.nodeId || ''}|${issue.code}|${issueText(issue)}`).join('\n'), syncValidationOverlay, { immediate: true })
 onBeforeRouteLeave(() => (!dirty.value && !saving.value) || window.confirm(t('designer.unsavedLeaveConfirm')))
-onMounted(async () => { window.addEventListener('keydown', handleKeydown); window.addEventListener('mouseup', stopMiddlePanning); window.addEventListener('blur', stopMiddlePanning); window.addEventListener('beforeunload', handleBeforeUnload); window.addEventListener('workflow-quick-add', handleQuickAdd); window.addEventListener('workflow-node-action', handleNodeAction); window.addEventListener('workflow-node-validation', handleNodeValidation); window.addEventListener('workflow-container-add', handleContainerAdd); window.addEventListener('workflow-container-delete', handleContainerDelete); window.addEventListener('workflow-edge-delete', handleEdgeDelete); await workspaces.load(); await Promise.all([load(), loadResources(), loadApprovals(), loadEnvironmentVariables()]); await loadLatestRunResults() })
+onMounted(async () => { window.addEventListener('keydown', handleKeydown); window.addEventListener('mouseup', stopMiddlePanning); window.addEventListener('blur', stopMiddlePanning); window.addEventListener('beforeunload', handleBeforeUnload); window.addEventListener('workflow-quick-add', handleQuickAdd); window.addEventListener('workflow-node-action', handleNodeAction); window.addEventListener('workflow-node-validation', handleNodeValidation); window.addEventListener('workflow-container-add', handleContainerAdd); window.addEventListener('workflow-container-delete', handleContainerDelete); window.addEventListener('workflow-edge-delete', handleEdgeDelete); await workspaces.load(); await loadResources(); await Promise.all([load(), loadApprovals(), loadEnvironmentVariables()]); await loadLatestRunResults() })
 onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTimeout(selectionRestoreTimer); window.removeEventListener('keydown', handleKeydown); window.removeEventListener('mouseup', stopMiddlePanning); window.removeEventListener('blur', stopMiddlePanning); window.removeEventListener('beforeunload', handleBeforeUnload); window.removeEventListener('workflow-quick-add', handleQuickAdd); window.removeEventListener('workflow-node-action', handleNodeAction); window.removeEventListener('workflow-node-validation', handleNodeValidation); window.removeEventListener('workflow-container-add', handleContainerAdd); window.removeEventListener('workflow-container-delete', handleContainerDelete); window.removeEventListener('workflow-edge-delete', handleEdgeDelete) })
 </script>
 
 <template>
   <div class="flex h-screen overflow-hidden bg-[var(--app-bg)]">
     <WorkflowDesignerSidebar
+      class="hidden lg:flex"
       :collapsed="sidebarCollapsed"
       :workflow-name="workflow?.name"
       :user-name="auth.user?.display_name"
@@ -1152,7 +1165,8 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
     />
 
     <div class="flex min-w-0 flex-1 flex-col">
-      <header class="flex h-12 shrink-0 items-center border-b border-[var(--border)] bg-[var(--panel)] px-4 transition-[padding]" :class="replayMode && 'pr-[446px]'">
+      <header class="designer-main-header flex h-12 shrink-0 items-center border-b border-[var(--border)] bg-[var(--panel)] px-4 transition-[padding]" :class="[replayMode && 'pr-[446px]', { 'inspector-open': selected }]">
+        <button class="icon-button mr-1 lg:hidden" :title="t('workflow.back')" :aria-label="t('workflow.back')" @click="router.push(`/w/${workspaceId}/studio`)"><ArrowLeft :size="16" /></button>
         <template v-if="replayMode">
           <div class="flex items-center gap-2 text-xs"><Activity :size="14" class="text-[var(--primary)]" /><span class="font-semibold">{{ t(`designer.triggerShort.${selectedRun?.triggered_by || 'studio'}`) }} ({{ selectedRun ? new Date(selectedRun.created_at).toLocaleTimeString() : '' }})</span><span class="muted">·</span><span class="rounded bg-[var(--panel-subtle)] px-2 py-1 text-[10px] font-medium">{{ t('designer.readOnly') }}</span></div>
           <div class="ml-auto flex items-center gap-2"><div class="relative"><button class="icon-button surface" :title="t('designer.runHistory')" :aria-label="t('designer.runHistory')" @click="showRunHistory ? showRunHistory = false : openRunHistory()"><Activity :size="16" /></button><RunHistoryPopover :open="showRunHistory" :runs="runs" @close="showRunHistory = false" @refresh="loadRuns" @replay="replayRun" /></div><Button variant="secondary" @click="exitReplayMode"><ArrowLeft :size="14" />{{ t('designer.returnToEdit') }}</Button></div>
@@ -1192,7 +1206,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
       </header>
 
       <div v-if="activeSection === 'orchestration'" class="flex min-h-0 flex-1">
-        <section ref="canvasHost" class="relative min-w-0 flex-1" @mousedown="handleCanvasMouseDown" @auxclick="handleCanvasAuxClick">
+        <section ref="canvasHost" class="designer-canvas-host relative min-w-0 flex-1" :class="{ 'inspector-open': selected && !showComments }" @mousedown="handleCanvasMouseDown" @auxclick="handleCanvasAuxClick">
           <VueFlow v-if="loaded" v-model:nodes="nodes" v-model:edges="edges" :node-types="nodeTypes" :edge-types="edgeTypes" :default-edge-options="{ type: 'workflow' }" :is-valid-connection="validConnection" :pan-on-drag="interactionMode === 'hand' || replayMode ? [0, 1] : [1]" :selection-key-code="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode ? true : null" :nodes-draggable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :nodes-connectable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" :elements-selectable="interactionMode === 'pointer' && !replayMode && !annotationMode && !commentMode" fit-view-on-init class="workflow-canvas" :class="{ 'replay-mode': replayMode, 'annotation-mode': annotationMode || commentMode, 'middle-panning': middlePanning }" @node-click="event => { nodeContextMenu = null; if (!replayMode && !annotationMode && !commentMode) selectNode(event) }" @node-context-menu="openNodeContextMenu" @node-drag-stop="handleNodeDragStop" @selection-end="restoreBoxSelection" @edge-click="clearNodeSelection" @pane-click="handlePaneClick">
             <Background :gap="18" :size="1" pattern-color="var(--border)" />
             <MiniMap pannable zoomable position="bottom-right" />
@@ -1372,4 +1386,10 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
 .canvas-history-button { display: flex; width: 34px; height: 34px; align-items: center; justify-content: center; color: var(--muted); }.canvas-history-button:hover:not(:disabled) { background: var(--panel-subtle); color: var(--primary); }.canvas-history-button:disabled { cursor: not-allowed; opacity: .35; }
 .run-detail-heading { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }.run-detail-code { margin-top: 8px; max-height: 260px; overflow: auto; white-space: pre-wrap; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-subtle); padding: 12px; font-size: 11px; line-height: 1.6; }
 .note-color-swatch { display: flex; width: 30px; height: 30px; align-items: center; justify-content: center; border: 2px solid transparent; border-radius: 7px; color: #344054; }.note-color-swatch.active { border-color: var(--primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary), transparent 82%); }.swatch-yellow { background: #fde68a; }.swatch-blue { background: #bfdbfe; }.swatch-green { background: #bbf7d0; }.swatch-rose { background: #fecdd3; }
+@media (max-width: 1023px) {
+  .designer-main-header.inspector-open, .designer-canvas-host.inspector-open { display: none; }
+  .designer-main-header { padding-inline: 8px; }
+  .designer-header-actions { min-width: 0; flex: 1; justify-content: flex-end; overflow-x: auto; scrollbar-width: none; }
+  .designer-header-actions::-webkit-scrollbar { display: none; }
+}
 </style>

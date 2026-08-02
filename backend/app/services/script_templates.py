@@ -1,6 +1,8 @@
 from copy import deepcopy
 from typing import Any
 
+from app.services.english_exam_script import english_exam_answer_filler_template
+
 SCRIPT_TEMPLATES: list[dict[str, Any]] = [
     {
         "id": "blank",
@@ -83,6 +85,7 @@ SCRIPT_TEMPLATES: list[dict[str, Any]] = [
         "output_schema": {"type": "object", "properties": {"summary": {"type": "string"}}, "required": ["summary"], "additionalProperties": False},
         "sample_inputs": {"text": "A long piece of text for the agent tool.", "max_length": 40},
     },
+    english_exam_answer_filler_template(),
 ]
 
 

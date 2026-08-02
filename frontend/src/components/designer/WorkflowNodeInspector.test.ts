@@ -25,7 +25,7 @@ describe('WorkflowNodeInspector', () => {
     })
 
     expect(wrapper.text()).toContain('LLM settings')
-    expect(wrapper.get('aside').classes()).toContain('z-30')
+    expect(wrapper.get('aside').classes()).toEqual(expect.arrayContaining(['z-30', 'w-full', 'lg:w-[420px]']))
     expect(wrapper.findAll('[role="tab"]')).toHaveLength(2)
     await wrapper.findAll('[role="tab"]')[1]!.trigger('click')
     expect(wrapper.emitted('update:tab')).toEqual([['run']])

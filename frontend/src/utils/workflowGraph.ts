@@ -25,7 +25,7 @@ export type WorkflowValidationIssue = {
   nodeId?: string
   params?: Record<string, string | number>
 }
-const executionPolicyNodeTypes = new Set(['llm', 'image', 'agent', 'code', 'script', 'template', 'variable', 'json', 'aggregate', 'extract', 'list', 'http', 'iteration', 'loop', 'delay', 'subworkflow', 'document'])
+const executionPolicyNodeTypes = new Set(['llm', 'image', 'agent', 'code', 'script', 'template', 'variable', 'json', 'aggregate', 'extract', 'list', 'http', 'iteration', 'loop', 'delay', 'subworkflow', 'document', 'answer_filler'])
 
 type MergeableWorkflowEdge = {
   id?: string
@@ -573,10 +573,13 @@ export function validateWorkflowGraph(
     if (type === 'delay' && (!(Number(config.seconds) > 0) || Number(config.seconds) > 86400)) issues.push({ code: 'delayDurationInvalid', nodeId: node.id, params })
     if (type === 'document') {
       const operation = String(config.operation || 'extract')
-      if (!['extract', 'fill_answers'].includes(operation)) issues.push({ code: 'documentOperationInvalid', nodeId: node.id, params })
+      if (operation !== 'extract') issues.push({ code: 'documentOperationInvalid', nodeId: node.id, params })
       if (!String(config.source || '').trim()) issues.push({ code: 'documentSourceRequired', nodeId: node.id, params })
-      if (operation === 'extract' && !['text', 'text_tables', 'text_images'].includes(config.extract_mode || 'text')) issues.push({ code: 'documentSettingsInvalid', nodeId: node.id, params })
-      if (operation === 'fill_answers' && !String(config.answers || '').trim()) issues.push({ code: 'documentContentRequired', nodeId: node.id, params })
+      if (!['text', 'text_tables', 'text_images'].includes(config.extract_mode || 'text')) issues.push({ code: 'documentSettingsInvalid', nodeId: node.id, params })
+    }
+    if (type === 'answer_filler') {
+      if (!String(config.source || '').trim()) issues.push({ code: 'answerFillerSourceRequired', nodeId: node.id, params })
+      if (!String(config.answers || '').trim()) issues.push({ code: 'answerFillerPlanRequired', nodeId: node.id, params })
     }
   }
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Handle, Position, type NodeProps } from '@vue-flow/core'
-import { AlertTriangle, Bot, Braces, BrainCircuit, CheckCircle2, CircleSlash, CircleStop, Code2, Combine, FileText, GitBranch, GitMerge, Globe2, Images, ListFilter, ListTree, Play, Plus, RefreshCw, Repeat2, ScanText, Timer, UserCheck, Workflow, XCircle } from 'lucide-vue-next'
+import { AlertTriangle, Bot, Braces, BrainCircuit, CheckCircle2, CircleSlash, CircleStop, Code2, Combine, FileCheck2, FileText, GitBranch, GitMerge, Globe2, Images, ListFilter, ListTree, Play, Plus, RefreshCw, Repeat2, ScanText, Timer, UserCheck, Workflow, XCircle } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import NodeActionMenu, { type NodeAction } from '@/components/designer/NodeActionMenu.vue'
 import NodeValidationBadge from '@/components/designer/NodeValidationBadge.vue'
@@ -61,6 +61,7 @@ const meta = computed(() => ({
   delay: { icon: Timer, tone: 'slate', detail: t('designer.nodeDetails.delay') },
   subworkflow: { icon: Workflow, tone: 'emerald', detail: props.data?.config?.workflow_name || t('designer.nodeDetails.subworkflow') },
   document: { icon: FileText, tone: 'rose', detail: 'Office / PDF' },
+  answer_filler: { icon: FileCheck2, tone: 'rose', detail: t('workflow.nodes.answer_filler') },
 }[nodeType.value] || { icon: Workflow, tone: 'blue', detail: nodeType.value }))
 </script>
 

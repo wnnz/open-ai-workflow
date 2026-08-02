@@ -1,6 +1,7 @@
 import gc
 import io
 import os
+import shutil
 import zipfile
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -8,8 +9,15 @@ from pathlib import Path
 from time import sleep as sleep_for_test
 from unittest.mock import AsyncMock
 
+TEST_STORAGE_PATH = Path("test-storage").resolve()
+TEST_SANDBOX_ARTIFACT_PATH = Path("test-sandbox-artifacts").resolve()
+for test_path in (TEST_STORAGE_PATH, TEST_SANDBOX_ARTIFACT_PATH):
+    shutil.rmtree(test_path, ignore_errors=True)
+
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test-ordo.db"
 os.environ["TASK_ALWAYS_EAGER"] = "true"
+os.environ["STORAGE_PATH"] = str(TEST_STORAGE_PATH)
+os.environ["SANDBOX_ARTIFACT_PATH"] = str(TEST_SANDBOX_ARTIFACT_PATH)
 Path("test-ordo.db").unlink(missing_ok=True)
 
 import httpx  # noqa: E402
@@ -21,11 +29,13 @@ import app.services.workflow_engine as workflow_engine  # noqa: E402
 from app.bootstrap import create_schema  # noqa: E402
 from app.core.database import engine  # noqa: E402
 from app.main import app  # noqa: E402
+from app.services.answer_filling import fill_docx_answers  # noqa: E402
 from app.services.scripts import validate_script  # noqa: E402
 from app.services.workflow_engine import (  # noqa: E402
     execute_graph,
     execute_http_request,
     execute_node,
+    validate_answer_filler_config,
     validate_code_config,
     validate_document_config,
     validate_http_config,
@@ -101,6 +111,8 @@ def schema():
             break
         except PermissionError:
             sleep_for_test(0.05)
+    for test_path in (TEST_STORAGE_PATH, TEST_SANDBOX_ARTIFACT_PATH):
+        shutil.rmtree(test_path, ignore_errors=True)
 
 
 @pytest.fixture(scope="module")
@@ -370,10 +382,7 @@ def test_script_zip_rejects_too_many_python_files(client: TestClient):
 def test_unsaved_script_draft_can_be_enqueued_for_testing(client: TestClient, monkeypatch):
     import app.api.routes.scripts as script_routes
 
-    session = client.post(
-        "/api/v1/auth/login",
-        json={"email": "owner@example.com", "password": "correct-horse-battery"},
-    ).json()
+    session = register(client, "script-draft@example.com", "Script Draft")
     workspace_id = client.get("/api/v1/workspaces", headers=auth(session)).json()[0]["id"]
     captured: dict = {}
 
@@ -409,6 +418,51 @@ def test_unsaved_script_draft_can_be_enqueued_for_testing(client: TestClient, mo
     assert captured["workspace_id"] == workspace_id
     assert captured["script_id"] is None
     assert captured["payload"]["source_files"]["helpers.py"].startswith("def value")
+
+
+def test_script_test_file_upload_is_hydrated_for_the_sandbox(
+    client: TestClient, monkeypatch
+):
+    import app.api.routes.scripts as script_routes
+
+    session = register(client, "script-file@example.com", "Script File")
+    workspace_id = client.get("/api/v1/workspaces", headers=auth(session)).json()[0]["id"]
+    uploaded = client.post(
+        f"/api/v1/workspaces/{workspace_id}/scripts/test-files",
+        headers=auth(session),
+        files={"file": ("input.docx", b"test", "application/octet-stream")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    captured: dict = {}
+
+    def capture_test(task_id, captured_workspace_id, script_id, payload):
+        captured.update(payload=payload)
+
+    monkeypatch.setattr(script_routes, "create_script_test", capture_test)
+    monkeypatch.setattr(script_routes.celery, "send_task", lambda *args, **kwargs: None)
+    response = client.post(
+        f"/api/v1/workspaces/{workspace_id}/scripts/test",
+        headers=auth(session),
+        json={
+            "source_code": "def main(inputs, context):\n    return {'ok': True}\n",
+            "entrypoint": "main:main",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "object",
+                        "x-ordo-type": "file",
+                        "required": ["filename", "content_type"],
+                    }
+                },
+                "required": ["source"],
+            },
+            "output_schema": {"type": "object"},
+            "inputs": {"source": uploaded.json()},
+        },
+    )
+    assert response.status_code == 202, response.text
+    assert captured["payload"]["inputs"]["source"]["__ordo_object_key"]
 
 
 def test_workflow_environment_variables_are_encrypted_masked_and_resolved(client: TestClient):
@@ -1088,11 +1142,13 @@ def test_llm_config_supports_messages_and_structured_output():
         validate_llm_config({"model": "gpt-4.1-mini", "prompt": "Hello", "reasoning": {"separate": "yes"}})
 
 
-def test_document_config_supports_docx_answer_workflow_operations():
+def test_document_and_answer_filler_configs_are_validated_separately():
     validate_document_config({"operation": "extract", "source": "{{inputs.file}}", "extract_mode": "text_tables", "ocr_fallback": True})
+    validate_answer_filler_config({"source": "{{inputs.file}}", "answers": "{{llm.structured_output}}"})
+    # Published legacy graphs keep this operation until they are republished.
     validate_document_config({"operation": "fill_answers", "source": "{{inputs.file}}", "answers": "{{llm.structured_output}}"})
     with pytest.raises(HTTPException):
-        validate_document_config({"operation": "fill_answers", "source": "{{inputs.file}}", "answers": ""})
+        validate_answer_filler_config({"source": "{{inputs.file}}", "answers": ""})
     with pytest.raises(HTTPException):
         validate_document_config({"operation": "convert", "source": "{{inputs.file}}", "target_format": "pdf"})
 
@@ -2372,9 +2428,16 @@ def test_english_exam_template_runs_and_downloads_docx_in_studio_and_public(
         "start",
         "document",
         "llm",
-        "document",
+        "script",
         "end",
     ]
+    scripts = client.get(
+        f"/api/v1/workspaces/{workspace_id}/scripts", headers=headers
+    ).json()
+    answer_script = next(
+        script for script in scripts if script["slug"] == "english-exam-answer-filler"
+    )
+    assert workflow_data["draft_graph"]["nodes"][3]["data"]["config"]["script_id"] == answer_script["id"]
 
     monkeypatch.setattr(
         workflow_engine,
@@ -2392,6 +2455,15 @@ def test_english_exam_template_runs_and_downloads_docx_in_studio_and_public(
                 ]
             },
         },
+    )
+    monkeypatch.setattr(
+        workflow_engine,
+        "execute_script_runtime",
+        lambda runtime, inputs: fill_docx_answers(
+            inputs["source"],
+            inputs["answers"],
+            output_name=str(inputs.get("output_name") or ""),
+        ),
     )
 
     document_xml = b'''<?xml version="1.0" encoding="UTF-8"?>

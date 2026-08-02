@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import io
-import json
 import mimetypes
 import posixpath
 import re
@@ -27,8 +26,6 @@ MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 MAX_DOCX_ENTRIES = 10_000
 MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
-MAX_INSERTIONS = 2_000
-MAX_ANSWER_LENGTH = 100_000
 
 
 def qn(namespace: str, name: str) -> str:
@@ -219,148 +216,6 @@ def extract_docx(source: Any, *, include_images: bool = False) -> dict[str, Any]
     }
 
 
-def _answer_plan(value: Any) -> list[dict[str, Any]]:
-    if isinstance(value, str):
-        raw = value.strip()
-        if raw.startswith("```"):
-            raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.IGNORECASE)
-        try:
-            value = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Answer plan is not valid JSON") from exc
-    if not isinstance(value, dict) or not isinstance(value.get("insertions"), list):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Answer plan requires an insertions array")
-    insertions = value["insertions"]
-    if len(insertions) > MAX_INSERTIONS:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Answer plan contains too many insertions")
-    if any(not isinstance(item, dict) for item in insertions):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Answer plan contains an invalid insertion")
-    return insertions
-
-
-def _normalized_anchor(value: str) -> str:
-    return re.sub(r"\s+", "", re.sub(r"\[图片\s*\d+\]", "", value)).casefold()
-
-
-def _append_text_run(paragraph: ET.Element, text: str, *, bold: bool) -> None:
-    run = ET.SubElement(paragraph, qn(W_NS, "r"))
-    properties = ET.SubElement(run, qn(W_NS, "rPr"))
-    if bold:
-        ET.SubElement(properties, qn(W_NS, "b"))
-    ET.SubElement(properties, qn(W_NS, "color"), {qn(W_NS, "val"): "FF0000"})
-    lines = text.split("\n")
-    for index, line in enumerate(lines):
-        if index:
-            ET.SubElement(run, qn(W_NS, "br"))
-        node = ET.SubElement(run, qn(W_NS, "t"), {qn(XML_NS, "space"): "preserve"})
-        node.text = line
-
-
-def _answer_paragraph(question_number: str, answer: str) -> ET.Element:
-    paragraph = ET.Element(W_P)
-    _append_text_run(paragraph, f"Answer {question_number}: ", bold=True)
-    _append_text_run(paragraph, answer, bold=False)
-    return paragraph
-
-
-def fill_docx_answers(source: Any, answers: Any, *, output_name: str = "") -> dict[str, Any]:
-    content, filename = _source_file(source)
-    insertions = _answer_plan(answers)
-    with _open_docx(content) as package:
-        document_xml = package.read(DOCUMENT_XML)
-        namespaces = _register_namespaces(document_xml)
-        root = _parse_document(document_xml)
-        paragraphs = list(root.iter(W_P))
-        parents = {child: parent for parent in root.iter() for child in parent}
-        paragraph_texts = [_paragraph_text(paragraph) for paragraph in paragraphs]
-        last_inserted: dict[ET.Element, ET.Element] = {}
-        report: list[dict[str, Any]] = []
-
-        for insertion in insertions:
-            question_number = str(insertion.get("question_number") or "").strip() or ""
-            answer = str(insertion.get("answer") or "").strip()
-            anchor_id = str(insertion.get("anchor_id") or "").strip().upper()
-            anchor_text = str(insertion.get("anchor") or "").strip()
-            if len(answer) > MAX_ANSWER_LENGTH:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "An answer is too long")
-
-            anchor_index: int | None = None
-            match = re.fullmatch(r"P(\d+)", anchor_id)
-            if match and 1 <= int(match.group(1)) <= len(paragraphs):
-                anchor_index = int(match.group(1)) - 1
-                matched_by = "anchor_id"
-            else:
-                normalized = _normalized_anchor(anchor_text)
-                candidates = [
-                    index
-                    for index, text in enumerate(paragraph_texts)
-                    if normalized and _normalized_anchor(text) == normalized
-                ]
-                if not candidates and normalized:
-                    candidates = [
-                        index
-                        for index, text in enumerate(paragraph_texts)
-                        if normalized in _normalized_anchor(text) or _normalized_anchor(text) in normalized
-                    ]
-                if candidates:
-                    anchor_index = candidates[-1]
-                    anchor_id = f"P{anchor_index + 1:04d}"
-                    matched_by = "anchor"
-                else:
-                    report.append(
-                        {
-                            "question_number": question_number,
-                            "anchor_id": anchor_id,
-                            "status": "not_found",
-                        }
-                    )
-                    continue
-
-            anchor = paragraphs[anchor_index]
-            parent = parents.get(anchor)
-            if parent is None:
-                report.append(
-                    {
-                        "question_number": question_number,
-                        "anchor_id": anchor_id,
-                        "status": "not_found",
-                    }
-                )
-                continue
-            previous = last_inserted.get(anchor, anchor)
-            paragraph = _answer_paragraph(question_number, answer)
-            parent.insert(list(parent).index(previous) + 1, paragraph)
-            last_inserted[anchor] = paragraph
-            report.append(
-                {
-                    "question_number": question_number,
-                    "anchor_id": anchor_id,
-                    "status": "inserted",
-                    "matched_by": matched_by,
-                }
-            )
-
-        _remove_unbound_ignorable_prefixes(root, namespaces)
-        updated_xml = ET.tostring(root, encoding="utf-8", xml_declaration=True)
-        output = io.BytesIO()
-        with zipfile.ZipFile(output, "w") as target:
-            for entry in package.infolist():
-                target.writestr(entry, updated_xml if entry.filename == DOCUMENT_XML else package.read(entry.filename))
-
-    stem = Path(filename).stem or "document"
-    requested_name = Path(output_name).name.strip() if output_name else ""
-    result_name = requested_name or f"{stem}_已作答.docx"
-    if not result_name.casefold().endswith(".docx"):
-        result_name = f"{result_name}.docx"
-    inserted_count = sum(item["status"] == "inserted" for item in report)
-    return {
-        "file": GeneratedFile(result_name, DOCX_CONTENT_TYPE, output.getvalue()),
-        "inserted_count": inserted_count,
-        "requested_count": len(insertions),
-        "insertions": report,
-    }
-
-
 def execute_document(config: dict[str, Any]) -> dict[str, Any]:
     operation = str(config.get("operation") or "extract")
     if operation == "extract":
@@ -369,6 +224,8 @@ def execute_document(config: dict[str, Any]) -> dict[str, Any]:
             include_images=config.get("extract_mode", "text") == "text_images",
         )
     if operation == "fill_answers":
+        from app.services.answer_filling import fill_docx_answers
+
         return fill_docx_answers(
             config.get("source"),
             config.get("answers"),
@@ -376,5 +233,5 @@ def execute_document(config: dict[str, Any]) -> dict[str, Any]:
         )
     raise HTTPException(
         status.HTTP_422_UNPROCESSABLE_CONTENT,
-        "Only DOCX extraction and answer filling are supported",
+        "Only DOCX extraction is supported",
     )

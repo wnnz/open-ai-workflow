@@ -45,7 +45,7 @@ const compactDetail = computed(() => {
   if (props.nodeType === 'llm' || props.nodeType === 'agent') return String(props.config?.model || props.fallback || 'LLM')
   if (props.nodeType === 'http') return [String(props.config?.method || 'GET').toUpperCase(), String(props.config?.url || '')].filter(Boolean).join('  ')
   if (props.nodeType === 'script') return [String(props.config?.script_name || props.fallback || 'Python'), props.config?.version ? `v${props.config.version}` : ''].filter(Boolean).join('  ·  ')
-  if (props.nodeType === 'document') return t(`designer.documentOperations.${props.config?.operation || 'extract'}`)
+  if (props.nodeType === 'document') return t('designer.documentExtractSummary')
   return props.fallback || ''
 })
 </script>

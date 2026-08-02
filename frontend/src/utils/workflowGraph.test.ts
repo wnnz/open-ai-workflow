@@ -337,15 +337,15 @@ describe('workflow graph utilities', () => {
     expect(validateWorkflowGraph(configured, edges)).toEqual([])
   })
 
-  it('validates operation-specific document inputs and settings', () => {
-    const document = { id: 'document', type: 'document', position: { x: 0, y: 0 }, data: { nodeType: 'document', label: 'Document', config: { operation: 'fill_answers', source: '', answers: '' } } }
+  it('validates dedicated answer-filler inputs separately from document settings', () => {
+    const document = { id: 'document', type: 'answer_filler', position: { x: 0, y: 0 }, data: { nodeType: 'answer_filler', label: 'Answer filler', config: { source: '', answers: '' } } }
     const configured = [
       { ...nodes[0], data: { nodeType: 'start', config: { triggers: ['api'], input_fields: [{ name: 'files', type: 'files' }] } } },
       document,
       { ...nodes[2], data: { nodeType: 'end', config: { outputs: [{ name: 'file', type: 'File', value: '{{document.file}}' }] } } },
     ]
     const edges = [{ id: 'a', source: 'start', target: 'document' }, { id: 'b', source: 'document', target: 'end' }]
-    expect(validateWorkflowGraph(configured, edges).map(issue => issue.code)).toEqual(expect.arrayContaining(['documentSourceRequired', 'documentContentRequired']))
+    expect(validateWorkflowGraph(configured, edges).map(issue => issue.code)).toEqual(expect.arrayContaining(['answerFillerSourceRequired', 'answerFillerPlanRequired']))
     Object.assign((document as any).data.config, { source: '{{inputs.files}}', answers: '{{llm.structured_output}}' })
     expect(validateWorkflowGraph(configured, edges)).toEqual([])
   })

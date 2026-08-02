@@ -1,11 +1,14 @@
 import io
 import zipfile
+from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import pytest
 
 import app.services.document_processing as document_processing
-from app.services.document_processing import GeneratedFile, extract_docx, fill_docx_answers
+from app.services.answer_filling import fill_docx_answers
+from app.services.document_processing import GeneratedFile, extract_docx
+from app.services.english_exam_script import ENGLISH_EXAM_ANSWER_FILLER_SOURCE
 from app.services.workflow_templates import build_english_exam_graph
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -107,6 +110,7 @@ def test_english_exam_template_is_a_valid_form_workflow():
         provider_id="provider-1",
         model="gpt-test",
         vision_enabled=True,
+        script_id="script-1",
     )
 
     start = graph["nodes"][0]
@@ -115,6 +119,55 @@ def test_english_exam_template_is_a_valid_form_workflow():
         "start",
         "document",
         "llm",
-        "document",
+        "script",
         "end",
     ]
+    script = graph["nodes"][3]
+    assert script["data"]["config"]["script_id"] == "script-1"
+    assert script["data"]["config"]["inputs"]["source"] == "{{上传英语试卷.exam_file}}"
+
+
+def test_english_exam_answer_filler_script_writes_declared_docx():
+    source_path = Path("test-answer-script-source.docx")
+    generated_path = Path("test-answer-script-output.docx")
+    try:
+        source_path.write_bytes(minimal_docx())
+        namespace: dict = {}
+        exec(ENGLISH_EXAM_ANSWER_FILLER_SOURCE, namespace)
+
+        result = namespace["main"](
+            {
+                "source": {
+                    "path": str(source_path),
+                    "filename": "exam.docx",
+                    "content_type": document_processing.DOCX_CONTENT_TYPE,
+                },
+                "answers": {
+                    "insertions": [
+                        {
+                            "question_number": "Reading",
+                            "anchor_id": "P0003",
+                            "anchor": "A. is  B. are",
+                            "answer": "1. are",
+                        }
+                    ]
+                },
+                "output_name": generated_path.name,
+            },
+            {
+                "output_dir": str(Path.cwd()),
+                "output_file": lambda path, filename, content_type: {
+                    "path": str(path),
+                    "filename": filename,
+                    "content_type": content_type,
+                },
+            },
+        )
+
+        assert result["inserted_count"] == 1
+        assert Path(result["file"]["path"]).resolve() == generated_path.resolve()
+        with zipfile.ZipFile(generated_path) as package:
+            assert b"Answer Reading: " in package.read("word/document.xml")
+    finally:
+        source_path.unlink(missing_ok=True)
+        generated_path.unlink(missing_ok=True)
