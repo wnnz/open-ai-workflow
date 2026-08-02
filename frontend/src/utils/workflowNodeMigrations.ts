@@ -19,6 +19,14 @@ function cloneSchema(value: Record<string, any>) {
   return JSON.parse(JSON.stringify(value))
 }
 
+const LEGACY_OUTPUT_NAME = '英语试卷_已作答.docx'
+
+function answeredOutputName(source: unknown, outputName: unknown) {
+  if (outputName && outputName !== LEGACY_OUTPUT_NAME) return outputName
+  const match = typeof source === 'string' ? source.match(/^\{\{\s*([^{}]+?)\s*\}\}$/) : null
+  return match ? `{{${match[1].trim()}.stem}}_已作答.docx` : LEGACY_OUTPUT_NAME
+}
+
 export function migrateLegacyAnswerFillerNodes<T extends WorkflowNode>(
   nodes: T[],
   script?: AnswerFillerScript,
@@ -53,7 +61,7 @@ export function migrateLegacyAnswerFillerNodes<T extends WorkflowNode>(
             inputs: {
               source: source || '',
               answers: answers || '',
-              output_name: output_name || '英语试卷_已作答.docx',
+              output_name: answeredOutputName(source, output_name),
             },
             input_schema: cloneSchema(script.input_schema || { type: 'object', properties: {} }),
             output_schema: cloneSchema(script.output_schema || { type: 'object', properties: {} }),

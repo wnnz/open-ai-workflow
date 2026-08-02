@@ -14,6 +14,12 @@ export type WorkflowVariableGroup = {
   variables: WorkflowVariable[]
 }
 
+function filenameStem(filename: string) {
+  const name = filename.replace(/\\/g, '/').split('/').pop() || ''
+  const suffix = name.lastIndexOf('.')
+  return suffix > 0 ? name.slice(0, suffix) : name
+}
+
 function nodeType(node: WorkflowNodeLike) {
   return String(node.data?.nodeType || node.type || '')
 }
@@ -111,11 +117,19 @@ function variablesForNode(node: WorkflowNodeLike): WorkflowVariable[] {
   const type = nodeType(node)
   if (type === 'start') {
     const prefix = nodeReferenceName(node) || node.id
-    return (node.data?.config?.input_fields || []).filter((field: any) => field?.name).map((field: any) => ({
-      path: `${prefix}.${field.name}`,
-      label: field.label || field.name,
-      type: field.type === 'files' ? 'Array[File]' : field.type === 'file' ? 'File' : field.type === 'number' ? 'Number' : 'String',
-    }))
+    return (node.data?.config?.input_fields || []).filter((field: any) => field?.name).flatMap((field: any) => {
+      const variable = {
+        path: `${prefix}.${field.name}`,
+        label: field.label || field.name,
+        type: field.type === 'files' ? 'Array[File]' : field.type === 'file' ? 'File' : field.type === 'number' ? 'Number' : 'String',
+      }
+      if (field.type !== 'file') return [variable]
+      return [
+        variable,
+        { path: `${variable.path}.filename`, label: 'filename', type: 'String' },
+        { path: `${variable.path}.stem`, label: 'stem', type: 'String' },
+      ]
+    })
   }
   return getNodeOutputVariables(node)
 }
@@ -144,7 +158,11 @@ export function readRuntimeVariable(path: string, nodeResults: Record<string, an
   for (const part of parts) {
     if (current == null) return undefined
     if (Array.isArray(current) && /^\d+$/.test(part)) current = current[Number(part)]
-    else if (typeof current === 'object') current = current[part]
+    else if (typeof current === 'object') {
+      current = part === 'stem' && current[part] === undefined && typeof current.filename === 'string'
+        ? filenameStem(current.filename)
+        : current[part]
+    }
     else return undefined
   }
   return current

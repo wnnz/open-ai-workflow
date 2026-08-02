@@ -125,6 +125,9 @@ def test_english_exam_template_is_a_valid_form_workflow():
     script = graph["nodes"][3]
     assert script["data"]["config"]["script_id"] == "script-1"
     assert script["data"]["config"]["inputs"]["source"] == "{{上传英语试卷.exam_file}}"
+    assert script["data"]["config"]["inputs"]["output_name"] == (
+        "{{上传英语试卷.exam_file.stem}}_已作答.docx"
+    )
 
 
 def test_english_exam_answer_filler_script_writes_declared_docx():

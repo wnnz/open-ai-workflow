@@ -167,7 +167,7 @@ def build_english_exam_graph(
                     "inputs": {
                         "source": "{{上传英语试卷.exam_file}}",
                         "answers": "{{解析题目并作答.structured_output}}",
-                        "output_name": "英语试卷_已作答.docx",
+                        "output_name": "{{上传英语试卷.exam_file.stem}}_已作答.docx",
                     },
                     "input_schema": ENGLISH_EXAM_ANSWER_FILLER_INPUT_SCHEMA,
                     "output_schema": ENGLISH_EXAM_ANSWER_FILLER_OUTPUT_SCHEMA,

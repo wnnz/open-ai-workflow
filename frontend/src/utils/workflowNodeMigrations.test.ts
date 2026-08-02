@@ -46,4 +46,28 @@ describe('migrateLegacyAnswerFillerNodes', () => {
 
     expect(result.nodes[0].type).toBe('answer_filler')
   })
+
+  it('replaces the legacy fixed filename with the source file stem', () => {
+    const source = [{
+      id: 'fill',
+      type: 'answer_filler',
+      data: {
+        nodeType: 'answer_filler',
+        config: {
+          source: '{{上传英语试卷.exam_file}}',
+          answers: '{{解析题目并作答.structured_output}}',
+          output_name: '英语试卷_已作答.docx',
+        },
+      },
+    }]
+
+    const result = migrateLegacyAnswerFillerNodes(source, {
+      id: 'script-1',
+      name: '英语试卷答案填充',
+    })
+
+    expect((result.nodes[0].data?.config as any)?.inputs.output_name).toBe(
+      '{{上传英语试卷.exam_file.stem}}_已作答.docx',
+    )
+  })
 })

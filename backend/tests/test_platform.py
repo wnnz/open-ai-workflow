@@ -950,6 +950,19 @@ def test_node_names_are_unique_and_resolve_chinese_variable_references():
     with pytest.raises(HTTPException, match="unique node names"):
         workflow_engine.validate_draft_graph(duplicate)
 
+
+def test_file_stem_variable_uses_the_uploaded_filename_without_its_extension():
+    context = {
+        "上传英语试卷": {
+            "exam_file": {"filename": r"uploads\期末试卷.v2.docx"}
+        }
+    }
+
+    assert workflow_engine.resolve_value(
+        "{{上传英语试卷.exam_file.stem}}_已作答.docx", context
+    ) == "期末试卷.v2_已作答.docx"
+
+
 def test_structured_end_outputs_are_resolved_and_validated(client: TestClient):
     session = client.post(
         "/api/v1/auth/login",

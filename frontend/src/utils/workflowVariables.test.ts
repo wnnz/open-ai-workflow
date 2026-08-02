@@ -4,6 +4,7 @@ import { buildAllVariableCatalog, buildVariableCatalog, getNodeOutputVariables, 
 const nodes = [
   { id: 'start', type: 'start', position: { x: 0, y: 0 }, data: { nodeType: 'start', label: '用户输入', config: { input_fields: [
     { name: 'message', label: '问题', type: 'text' },
+    { name: 'file', label: '文档', type: 'file' },
     { name: 'files', label: '附件', type: 'files' },
   ] } } },
   { id: 'extract-1', type: 'extract', position: { x: 0, y: 0 }, data: { nodeType: 'extract', label: '参数提取', config: { fields: [{ name: 'customer' }, { name: 'count', type: 'Number' }] } } },
@@ -25,6 +26,8 @@ describe('workflow variable catalog', () => {
     expect(groups.map(group => group.nodeId)).toEqual(['start', 'extract-1', 'variables-1', 'llm-1'])
     expect(groups.flatMap(group => group.variables)).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: '用户输入.message', label: '问题', type: 'String' }),
+      expect.objectContaining({ path: '用户输入.file.filename', label: 'filename', type: 'String' }),
+      expect.objectContaining({ path: '用户输入.file.stem', label: 'stem', type: 'String' }),
       expect.objectContaining({ path: '用户输入.files', type: 'Array[File]' }),
       expect.objectContaining({ path: '参数提取.customer' }),
       expect.objectContaining({ path: '变量赋值.region' }),
@@ -49,10 +52,12 @@ describe('workflow variable catalog', () => {
       expect.objectContaining({ path: '其他请求.ok', type: 'Boolean' }),
     ]))
     const results = {
-      start: { node_type: 'start', output: { message: 'Hello' } },
+      start: { node_type: 'start', output: { message: 'Hello', file: { filename: '英语期末试卷.v2.docx' } } },
       'llm-1': { node_type: 'llm', output: { structured_output: { title: 'Weekly report' } } },
     }
     expect(readRuntimeVariable('用户输入.message', results, nodes)).toBe('Hello')
+    expect(readRuntimeVariable('用户输入.file.filename', results, nodes)).toBe('英语期末试卷.v2.docx')
+    expect(readRuntimeVariable('用户输入.file.stem', results, nodes)).toBe('英语期末试卷.v2')
     expect(readRuntimeVariable('生成内容.structured_output.title', results, nodes)).toBe('Weekly report')
     expect(readRuntimeVariable('生成内容.structured_output.missing', results, nodes)).toBeUndefined()
     expect(readRuntimeVariable('llm-1.structured_output.title', results, nodes)).toBe('Weekly report')

@@ -47,7 +47,7 @@ watch(() => [props.config.script_id, props.config.version, selectedScript.value?
 <template>
   <div class="mt-5">
     <NodeConfigSection :title="$t('designer.nodeParameters')" :hint="$t('designer.nodeParametersHint')" kind="parameters">
-      <NodeConfigSection :title="$t('designer.workspaceScript')">
+      <NodeConfigSection :title="$t('designer.scriptConfiguration')">
         <div class="grid grid-cols-2 gap-3"><label class="field-label">{{ $t('designer.workspaceScript') }}<Select :model-value="config.script_id || ''" class="mt-1.5" :options="scripts.map(script => ({ label: `${script.name} · v${script.latest_version}`, value: script.id }))" :placeholder="$t('designer.selectScript')" @update:model-value="selectScript" /></label><label class="field-label">{{ $t('designer.scriptVersion') }}<Select :model-value="config.version || 'latest'" class="mt-1.5" :disabled="!selectedScript" :options="[{ label: $t('designer.followLatest'), value: 'latest' }, ...versions.map(version => ({ label: `v${version.version} · ${version.change_note || version.entrypoint}`, value: version.version }))]" @update:model-value="selectVersion" /></label></div>
         <p v-if="!scripts.length" class="resource-empty mt-2">{{ $t('designer.noScripts') }}</p>
       </NodeConfigSection>

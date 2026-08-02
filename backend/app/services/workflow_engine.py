@@ -8,6 +8,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor
 from concurrent.futures import wait as wait_for_futures
 from copy import deepcopy
 from datetime import UTC, datetime
+from pathlib import PurePosixPath
 from time import sleep
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -810,7 +811,15 @@ def lookup(context: dict[str, Any], path: str) -> Any:
     for part in (segment.strip() for segment in path.split(".")):
         if not isinstance(current, dict):
             return None
-        current = current.get(part)
+        if (
+            part == "stem"
+            and part not in current
+            and isinstance(current.get("filename"), str)
+        ):
+            filename = str(current["filename"]).replace("\\", "/")
+            current = PurePosixPath(filename).stem
+        else:
+            current = current.get(part)
     return current
 
 
