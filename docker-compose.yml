@@ -77,7 +77,6 @@ services:
 
   beat:
     <<: *backend
-    profiles: ["schedule"]
     command: celery -A app.worker.celery beat --loglevel=INFO
 
   sandbox:

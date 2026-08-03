@@ -18,6 +18,9 @@ os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test-ordo.db"
 os.environ["TASK_ALWAYS_EAGER"] = "true"
 os.environ["STORAGE_PATH"] = str(TEST_STORAGE_PATH)
 os.environ["SANDBOX_ARTIFACT_PATH"] = str(TEST_SANDBOX_ARTIFACT_PATH)
+os.environ["PUBLIC_RATE_LIMIT_REQUESTS"] = "0"
+os.environ["PUBLIC_ACCESS_RATE_LIMIT_REQUESTS"] = "0"
+os.environ["PUBLIC_UPLOAD_RATE_LIMIT_REQUESTS"] = "0"
 Path("test-ordo.db").unlink(missing_ok=True)
 
 import httpx  # noqa: E402
@@ -25,11 +28,16 @@ import pytest  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+import app.api.routes.public as public_routes  # noqa: E402
+import app.api.routes.workflows as workflow_routes  # noqa: E402
 import app.services.workflow_engine as workflow_engine  # noqa: E402
+import app.worker as workflow_worker  # noqa: E402
 from app.bootstrap import create_schema  # noqa: E402
-from app.core.database import engine  # noqa: E402
+from app.core.database import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
+from app.models.entities import StoredFile, WorkflowRun  # noqa: E402
 from app.services.answer_filling import fill_docx_answers  # noqa: E402
+from app.services.run_control import claim_workflow_run  # noqa: E402
 from app.services.scripts import validate_script  # noqa: E402
 from app.services.workflow_engine import (  # noqa: E402
     execute_graph,
@@ -41,6 +49,7 @@ from app.services.workflow_engine import (  # noqa: E402
     validate_http_config,
     validate_llm_config,
 )
+from app.services.workflow_files import cleanup_file_lifecycle  # noqa: E402
 
 
 @pytest.mark.asyncio
@@ -630,6 +639,50 @@ def test_agent_script_tools_are_pinned_on_publish():
         "script_version_id": "script-version-2",
         "version": 2,
     }
+
+
+def test_unknown_nodes_are_rejected_in_drafts_published_graphs_and_execution():
+    graph = {
+        "nodes": [
+            {"id": "start", "type": "start", "data": {"label": "Start", "config": {"triggers": ["form"], "input_fields": []}}},
+            {"id": "mystery", "type": "mystery", "data": {"label": "Mystery", "config": {}}},
+            {"id": "end", "type": "end", "data": {"label": "End", "config": {"outputs": [{"name": "done", "type": "String", "value": "done"}]}}},
+        ],
+        "edges": [
+            {"id": "a", "source": "start", "target": "mystery"},
+            {"id": "b", "source": "mystery", "target": "end"},
+        ],
+    }
+
+    for validator in (workflow_engine.validate_draft_graph, workflow_engine.validate_graph):
+        with pytest.raises(HTTPException, match="Unsupported node type: mystery"):
+            validator(graph)
+    with pytest.raises(HTTPException, match="Unsupported node type: mystery"):
+        execute_node(graph["nodes"][1], {"inputs": {}, "env": {}, "sys": {}})
+
+
+def test_workflow_execution_stops_when_cancellation_is_requested():
+    graph = {
+        "nodes": [
+            {"id": "start", "type": "start", "data": {"label": "Start", "config": {"triggers": ["api"], "input_fields": []}}},
+            {"id": "delay", "type": "delay", "data": {"label": "Delay", "config": {"seconds": 0.1}}},
+            {"id": "end", "type": "end", "data": {"label": "End", "config": {"outputs": [{"name": "done", "type": "String", "value": "done"}]}}},
+        ],
+        "edges": [
+            {"id": "a", "source": "start", "target": "delay"},
+            {"id": "b", "source": "delay", "target": "end"},
+        ],
+    }
+    checks = 0
+
+    def cancellation_requested() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 4
+
+    with pytest.raises(workflow_engine.WorkflowCancelled, match="cancelled"):
+        execute_graph(graph, {}, cancellation_callback=cancellation_requested)
+    assert checks == 4
 
 
 def test_workspace_scope_blocks_foreign_script_access(client: TestClient):
@@ -2610,3 +2663,188 @@ def test_english_exam_template_runs_and_downloads_docx_in_studio_and_public(
     assert public_download.headers["content-type"].startswith(
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
+
+
+def test_public_runs_are_idempotent_and_guarded(client: TestClient, monkeypatch):
+    session = register(client, "public-guard@example.com", "Public Guard")
+    headers = auth(session)
+    workspace_id = client.get("/api/v1/workspaces", headers=headers).json()[0]["id"]
+    workflow = client.post(
+        f"/api/v1/workspaces/{workspace_id}/workflows",
+        headers=headers,
+        json={"name": "Idempotent public form"},
+    ).json()
+    published = client.post(
+        f"/api/v1/workspaces/{workspace_id}/workflows/{workflow['id']}/publish",
+        headers=headers,
+        json={"access": "public"},
+    )
+    assert published.status_code == 200, published.text
+
+    url = f"/v1/apps/{workflow['slug']}/form"
+    request_headers = {"Idempotency-Key": "submission-001"}
+    first = client.post(
+        url,
+        headers=request_headers,
+        json={"inputs": {"message": "hello"}},
+    )
+    repeated = client.post(
+        url,
+        headers=request_headers,
+        json={"inputs": {"message": "hello"}},
+    )
+    conflicting = client.post(
+        url,
+        headers=request_headers,
+        json={"inputs": {"message": "different"}},
+    )
+    assert first.status_code == 200, first.text
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["run_id"] == first.json()["run_id"]
+    assert conflicting.status_code == 409
+
+    guarded = AsyncMock(
+        side_effect=HTTPException(status_code=429, detail="Too many requests")
+    )
+    monkeypatch.setattr(public_routes, "enforce_public_rate_limit", guarded)
+    limited = client.post(url, json={"inputs": {"message": "limited"}})
+    assert limited.status_code == 429
+    guarded.assert_awaited_once()
+
+
+def test_workflow_runs_can_be_cancelled_and_retried(client: TestClient, monkeypatch):
+    session = register(client, "run-control@example.com", "Run Control")
+    headers = auth(session)
+    workspace_id = client.get("/api/v1/workspaces", headers=headers).json()[0]["id"]
+    workflow = client.post(
+        f"/api/v1/workspaces/{workspace_id}/workflows",
+        headers=headers,
+        json={"name": "Controlled workflow"},
+    ).json()
+    enqueue = AsyncMock()
+    monkeypatch.setattr(workflow_routes, "enqueue_persisted_workflow_run", enqueue)
+
+    created = client.post(
+        f"/api/v1/workspaces/{workspace_id}/workflows/{workflow['id']}/run",
+        headers=headers,
+        json={"inputs": {"message": "cancel me"}},
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["status"] == "pending"
+    run_id = created.json()["id"]
+
+    cancelled = client.post(
+        f"/api/v1/workspaces/{workspace_id}/workflows/{workflow['id']}/runs/{run_id}/cancel",
+        headers=headers,
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "cancelled"
+    assert cancelled.json()["cancel_requested_at"]
+
+    retried = client.post(
+        f"/api/v1/workspaces/{workspace_id}/workflows/{workflow['id']}/runs/{run_id}/retry",
+        headers=headers,
+    )
+    assert retried.status_code == 201, retried.text
+    assert retried.json()["status"] == "pending"
+    assert retried.json()["retry_of_run_id"] == run_id
+    assert retried.json()["id"] != run_id
+    assert enqueue.await_count == 2
+
+    async def claim_retry_once() -> tuple[bool, bool, str, int]:
+        retried_run_id = retried.json()["id"]
+        async with SessionLocal() as first_db:
+            first = await claim_workflow_run(first_db, retried_run_id)
+        async with SessionLocal() as second_db:
+            duplicate = await claim_workflow_run(second_db, retried_run_id)
+            stored = await second_db.get(WorkflowRun, retried_run_id)
+            assert stored is not None
+            return first is not None, duplicate is not None, stored.status, stored.attempt_count
+
+    import asyncio
+
+    claimed, claimed_twice, run_status, attempt_count = asyncio.run(claim_retry_once())
+    assert claimed is True
+    assert claimed_twice is False
+    assert run_status == "running"
+    assert attempt_count == 1
+
+
+def test_worker_persists_cooperative_cancellation(client: TestClient, monkeypatch):
+    session = register(client, "worker-cancel@example.com", "Worker Cancel")
+    headers = auth(session)
+    workspace_id = client.get("/api/v1/workspaces", headers=headers).json()[0]["id"]
+    workflow = client.post(
+        f"/api/v1/workspaces/{workspace_id}/workflows",
+        headers=headers,
+        json={"name": "Worker cancellation"},
+    ).json()
+    monkeypatch.setattr(
+        workflow_routes,
+        "enqueue_persisted_workflow_run",
+        AsyncMock(),
+    )
+    created = client.post(
+        f"/api/v1/workspaces/{workspace_id}/workflows/{workflow['id']}/run",
+        headers=headers,
+        json={"inputs": {}},
+    )
+    assert created.status_code == 200, created.text
+    run_id = created.json()["id"]
+    monkeypatch.setattr(
+        workflow_worker,
+        "run_cancellation_requested",
+        lambda requested_run_id: requested_run_id == run_id,
+    )
+
+    import asyncio
+
+    assert asyncio.run(workflow_worker._execute_run(run_id)) == "cancelled"
+    stored = client.get(
+        f"/api/v1/workspaces/{workspace_id}/workflows/{workflow['id']}/runs/{run_id}",
+        headers=headers,
+    )
+    assert stored.status_code == 200, stored.text
+    assert stored.json()["status"] == "cancelled"
+    assert stored.json()["attempt_count"] == 1
+
+
+def test_expired_files_are_removed_from_database_and_storage(client: TestClient):
+    session = register(client, "file-lifecycle@example.com", "File Lifecycle")
+    headers = auth(session)
+    workspace_id = client.get("/api/v1/workspaces", headers=headers).json()[0]["id"]
+    workflow = client.post(
+        f"/api/v1/workspaces/{workspace_id}/workflows",
+        headers=headers,
+        json={"name": "File lifecycle workflow"},
+    ).json()
+    uploaded = client.post(
+        f"/api/v1/workspaces/{workspace_id}/workflows/{workflow['id']}/files",
+        headers=headers,
+        files={"file": ("temporary.txt", b"temporary", "text/plain")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    file_id = uploaded.json()["id"]
+
+    async def expire_and_cleanup() -> tuple[dict[str, int], Path]:
+        async with SessionLocal() as db:
+            stored = await db.get(StoredFile, file_id)
+            assert stored is not None
+            path = TEST_STORAGE_PATH.joinpath(*stored.object_key.split("/"))
+            stored.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            await db.commit()
+        async with SessionLocal() as db:
+            result = await cleanup_file_lifecycle(db)
+        return result, path
+
+    import asyncio
+
+    cleanup, path = asyncio.run(expire_and_cleanup())
+    assert cleanup["expired"] == 1
+    assert not path.exists()
+
+    async def file_exists() -> bool:
+        async with SessionLocal() as db:
+            return await db.get(StoredFile, file_id) is not None
+
+    assert asyncio.run(file_exists()) is False

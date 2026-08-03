@@ -1,12 +1,12 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, File, Header, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DbSession
-from app.core.config import get_settings
 from app.core.security import (
     create_app_access_token,
     decode_access_token,
@@ -24,13 +24,25 @@ from app.models.entities import (
     WorkflowVersion,
 )
 from app.schemas.workflow import RunIn
+from app.services.public_guard import enforce_public_rate_limit
+from app.services.run_control import (
+    enqueue_persisted_workflow_run,
+    ensure_public_run_capacity,
+    find_idempotent_run,
+    new_task_id,
+    normalize_idempotency_key,
+    request_fingerprint,
+)
 from app.services.run_events import stream_run_events
 from app.services.script_runtime import hydrate_script_resources
 from app.services.storage import object_path
-from app.services.task_queue import enqueue_workflow_run
-from app.services.uploads import store_upload
 from app.services.workflow_engine import validate_run_inputs
-from app.services.workflow_files import contains_file_id
+from app.services.workflow_files import (
+    contains_file_id,
+    create_uploaded_file,
+    extend_file_retention,
+    stored_file_available,
+)
 
 router = APIRouter(prefix="/apps", tags=["published apps"])
 
@@ -222,9 +234,11 @@ async def authorize_published_access(
     app_slug: str,
     payload: AccessRequest,
     db: DbSession,
+    request: Request,
     authorization: str | None = Header(default=None),
     x_app_access: str | None = Header(default=None),
 ) -> dict:
+    await enforce_public_rate_limit(request, app_slug, "access")
     workflow, _ = await get_published(db, app_slug)
     if workflow.published_access != "protected":
         return {"authorized": True}
@@ -261,6 +275,7 @@ async def execute_published(
     authorization: str | None,
     app_access: str | None,
     triggered_by: str,
+    idempotency_header: str | None,
 ) -> dict:
     workflow, version = await get_published(db, app_slug)
     credential: ApiKey | User | WorkflowAccessGrant | None
@@ -268,8 +283,26 @@ async def execute_published(
         credential = await authorize_form_access(db, workflow, authorization, app_access)
     else:
         credential = await authorize_api_key(db, workflow, authorization)
+    idempotency_key = normalize_idempotency_key(idempotency_header)
+    fingerprint = request_fingerprint(payload.inputs, payload.user)
+    existing = await find_idempotent_run(
+        db,
+        workflow_id=workflow.id,
+        triggered_by=triggered_by,
+        idempotency_key=idempotency_key,
+        fingerprint=fingerprint,
+    )
+    if existing:
+        return public_run_response(existing, version.version)
+    await ensure_public_run_capacity(db, workflow.id)
     execution_graph = await hydrate_script_resources(db, version.graph, version.resolved_references)
     validate_run_inputs(execution_graph, payload.inputs)
+    await extend_file_retention(
+        db,
+        workflow.workspace_id,
+        payload.inputs,
+        purpose="public_run_input",
+    )
     run = WorkflowRun(
         workspace_id=workflow.workspace_id,
         workflow_id=workflow.id,
@@ -285,13 +318,38 @@ async def execute_published(
         ),
         inputs=payload.inputs,
         execution_graph=execution_graph,
+        task_id=new_task_id(),
+        idempotency_key=idempotency_key,
+        request_fingerprint=fingerprint if idempotency_key else None,
     )
     db.add(run)
-    await db.flush()
-    await db.commit()
-    if await enqueue_workflow_run(run.id):
-        await db.refresh(run)
-    return {"run_id": run.id, "status": run.status, "version": version.version, "outputs": run.outputs, "trace": run.trace}
+    try:
+        await db.flush()
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        existing = await find_idempotent_run(
+            db,
+            workflow_id=workflow.id,
+            triggered_by=triggered_by,
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+        )
+        if not existing:
+            raise
+        return public_run_response(existing, version.version)
+    await enqueue_persisted_workflow_run(db, run)
+    return public_run_response(run, version.version)
+
+
+def public_run_response(run: WorkflowRun, version: int) -> dict:
+    return {
+        "run_id": run.id,
+        "status": run.status,
+        "version": version,
+        "outputs": run.outputs,
+        "trace": run.trace,
+    }
 
 
 @router.post("/{app_slug}/run")
@@ -299,11 +357,16 @@ async def run_published(
     app_slug: str,
     payload: RunIn,
     db: DbSession,
+    request: Request,
     authorization: str | None = Header(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> dict:
+    await enforce_public_rate_limit(request, app_slug, "run")
     _, version = await get_published(db, app_slug)
     ensure_trigger(version, "api")
-    return await execute_published(app_slug, payload, db, authorization, None, "api")
+    return await execute_published(
+        app_slug, payload, db, authorization, None, "api", idempotency_key
+    )
 
 
 @router.post("/{app_slug}/form")
@@ -311,12 +374,23 @@ async def run_published_form(
     app_slug: str,
     payload: RunIn,
     db: DbSession,
+    request: Request,
     authorization: str | None = Header(default=None),
     x_app_access: str | None = Header(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> dict:
+    await enforce_public_rate_limit(request, app_slug, "run")
     _, version = await get_published(db, app_slug)
     ensure_trigger(version, "form")
-    return await execute_published(app_slug, payload, db, authorization, x_app_access, "form")
+    return await execute_published(
+        app_slug,
+        payload,
+        db,
+        authorization,
+        x_app_access,
+        "form",
+        idempotency_key,
+    )
 
 
 @router.post("/{app_slug}/webhook")
@@ -324,11 +398,22 @@ async def webhook_published(
     app_slug: str,
     payload: RunIn,
     db: DbSession,
+    request: Request,
     authorization: str | None = Header(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> dict:
+    await enforce_public_rate_limit(request, app_slug, "run")
     workflow, version = await get_published(db, app_slug)
     ensure_trigger(version, "webhook")
-    return await execute_published(app_slug, payload, db, authorization, None, "webhook")
+    return await execute_published(
+        app_slug,
+        payload,
+        db,
+        authorization,
+        None,
+        "webhook",
+        idempotency_key,
+    )
 
 
 @router.get("/{app_slug}/runs/{run_id}")
@@ -376,6 +461,7 @@ async def download_published_run_file(
         or run.workflow_version_id != version.id
         or not stored
         or stored.workspace_id != workflow.workspace_id
+        or not stored_file_available(stored)
         or not contains_file_id(run.outputs, file_id)
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Workflow output file not found")
@@ -411,25 +497,21 @@ async def get_published_run_events(
 async def upload_published_file(
     app_slug: str,
     db: DbSession,
+    request: Request,
     file: UploadFile = File(...),
     authorization: str | None = Header(default=None),
     x_app_access: str | None = Header(default=None),
 ) -> dict:
+    await enforce_public_rate_limit(request, app_slug, "upload")
     workflow, _ = await get_published(db, app_slug)
     await authorize_run_access(db, workflow, authorization, x_app_access)
-    key, digest, size = await store_upload(
-        workflow.workspace_id, file, get_settings().max_upload_bytes
-    )
-    stored = StoredFile(
+    stored = await create_uploaded_file(
+        db,
         workspace_id=workflow.workspace_id,
-        object_key=key,
-        filename=file.filename or "file",
-        content_type=file.content_type or "application/octet-stream",
-        size=size,
-        sha256=digest,
         created_by=workflow.created_by,
+        file=file,
+        purpose="public_run_input",
     )
-    db.add(stored)
     await db.commit()
     await db.refresh(stored)
     return {"id": stored.id, "filename": stored.filename, "content_type": stored.content_type, "size": stored.size}

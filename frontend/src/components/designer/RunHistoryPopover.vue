@@ -10,7 +10,7 @@ function statusClass(status: string) {
   if (status === 'succeeded') return 'bg-emerald-500'
   if (status === 'failed') return 'bg-red-500'
   if (status === 'running') return 'bg-blue-500'
-  if (status === 'waiting' || status === 'pending') return 'bg-amber-500'
+  if (status === 'waiting' || status === 'pending' || status === 'cancelling') return 'bg-amber-500'
   return 'bg-slate-400'
 }
 
@@ -18,7 +18,7 @@ function statusTone(status: string) {
   if (status === 'succeeded') return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300'
   if (status === 'failed') return 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300'
   if (status === 'running') return 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300'
-  if (status === 'waiting' || status === 'pending') return 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300'
+  if (status === 'waiting' || status === 'pending' || status === 'cancelling') return 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300'
   return 'bg-[var(--panel-subtle)] text-[var(--muted)]'
 }
 

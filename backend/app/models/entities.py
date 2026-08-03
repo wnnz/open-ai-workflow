@@ -226,6 +226,15 @@ class WorkflowVersion(Base):
 
 class WorkflowRun(Base):
     __tablename__ = "workflow_runs"
+    __table_args__ = (
+        Index(
+            "ux_workflow_runs_idempotency",
+            "workflow_id",
+            "triggered_by",
+            "idempotency_key",
+            unique=True,
+        ),
+    )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
     workspace_id: Mapped[str] = mapped_column(
         ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
@@ -242,6 +251,19 @@ class WorkflowRun(Base):
     outputs: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     trace: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    task_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    retry_of_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -318,6 +340,10 @@ class StoredFile(Base):
     content_type: Mapped[str] = mapped_column(String(200))
     size: Mapped[int] = mapped_column(Integer)
     sha256: Mapped[str] = mapped_column(String(64), index=True)
+    purpose: Mapped[str] = mapped_column(String(40), default="upload")
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 

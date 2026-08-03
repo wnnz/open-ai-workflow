@@ -126,6 +126,11 @@ class RunOut(ApiModel):
     outputs: dict[str, Any]
     trace: list[dict[str, Any]]
     error: str | None
+    task_id: str | None
+    attempt_count: int
+    retry_of_run_id: str | None
+    started_at: datetime | None
+    cancel_requested_at: datetime | None
     created_at: datetime
     finished_at: datetime | None
 
@@ -135,6 +140,9 @@ class RunSummaryOut(ApiModel):
     status: str
     triggered_by: str
     error: str | None
+    retry_of_run_id: str | None
+    started_at: datetime | None
+    cancel_requested_at: datetime | None
     created_at: datetime
     finished_at: datetime | None
 

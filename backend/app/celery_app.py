@@ -14,6 +14,14 @@ celery.conf.update(
         "dispatch-workflow-schedules": {
             "task": "workflow.dispatch_schedules",
             "schedule": 60.0,
-        }
+        },
+        "recover-workflow-runs": {
+            "task": "workflow.recover_runs",
+            "schedule": 60.0,
+        },
+        "cleanup-stored-files": {
+            "task": "storage.cleanup_files",
+            "schedule": 3600.0,
+        },
     },
 )

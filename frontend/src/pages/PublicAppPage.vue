@@ -27,7 +27,7 @@ const loading = ref(false)
 const result = ref<any>(null)
 const error = ref('')
 const slug = String(route.params.slug)
-const terminalStatuses = new Set(['succeeded', 'failed', 'waiting'])
+const terminalStatuses = new Set(['succeeded', 'failed', 'cancelled', 'waiting'])
 let activeRunId = ''
 const headers = (): Record<string, string> => {
   if (appAccessToken.value) return { 'X-App-Access': appAccessToken.value }
@@ -187,7 +187,7 @@ async function run() {
   let runId = ''
   try {
     const inputs = coerceWorkflowInputValues(app.value.input_fields, values.value)
-    const created = (await axios.post(`/v1/apps/${slug}/form`, { inputs }, { headers: { ...headers(), 'Content-Type': 'application/json' } })).data
+    const created = (await axios.post(`/v1/apps/${slug}/form`, { inputs }, { headers: { ...headers(), 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() } })).data
     runId = String(created.run_id)
     activeRunId = runId
     result.value = created
@@ -214,6 +214,7 @@ onMounted(load)
         <Button class="mt-6 w-full" type="submit" :loading="loading" :disabled="loading"><Play :size="16" />{{ t('publicApp.run') }}</Button>
         <AlertBanner v-if="running" :message="t('publicApp.running')" tone="info" />
         <AlertBanner v-else-if="result?.status === 'waiting'" :message="t('publicApp.waiting')" tone="info" />
+        <AlertBanner v-else-if="result?.status === 'cancelled'" :message="t('publicApp.cancelled')" tone="info" />
         <WorkflowOutputRenderer v-if="result?.status === 'succeeded'" class="mt-4" :output="result.outputs" :download-headers="headers()" />
       </form>
       <section v-else-if="app?.triggers?.includes('form') && app?.access === 'protected'" class="surface rounded-xl p-6 shadow-sm">

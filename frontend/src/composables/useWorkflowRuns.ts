@@ -35,6 +35,8 @@ export function useWorkflowRuns(options: WorkflowRunOptions) {
   const showApprovals = ref(false)
   const approvalComment = ref('')
   const respondingApproval = ref(false)
+  const cancelingRun = ref(false)
+  const retryingRun = ref(false)
 
   const replayMode = computed(() => Boolean(runtimeRunId.value && selectedRun.value))
   const selectedResult = computed<any>(() => options.selected.value ? nodeResults.value[options.selected.value.id] : null)
@@ -128,6 +130,27 @@ export function useWorkflowRuns(options: WorkflowRunOptions) {
     showApprovals.value = true
   }
 
+  function runEventsUrl(runId: string) {
+    return `/api/v1/workspaces/${options.workspaceId.value}/workflows/${options.workflowId.value}/runs/${runId}/events`
+  }
+
+  async function followQueuedRun(created: any) {
+    result.value = created
+    if (!['pending', 'running', 'cancelling'].includes(String(created?.status))) return
+    let streamedText = ''
+    await consumeRunEvents(runEventsUrl(created.id), event => {
+      if (event.type === 'token') {
+        streamedText += String(event.delta || '')
+        result.value = { ...result.value, status: 'running', outputs: { text: streamedText } }
+      } else if (event.status) {
+        result.value = { ...result.value, status: event.status }
+      }
+    })
+    result.value = (await api.get(
+      `/workspaces/${options.workspaceId.value}/workflows/${options.workflowId.value}/runs/${created.id}`,
+    )).data
+  }
+
   async function run() {
     running.value = true
     runError.value = ''
@@ -138,19 +161,9 @@ export function useWorkflowRuns(options: WorkflowRunOptions) {
       const path = runTargetNodeId.value
         ? `/workspaces/${options.workspaceId.value}/workflows/${options.workflowId.value}/nodes/${runTargetNodeId.value}/run`
         : `/workspaces/${options.workspaceId.value}/workflows/${options.workflowId.value}/run`
-      result.value = (await api.post(path, { inputs })).data
-      if (!runTargetNodeId.value && result.value.status === 'pending') {
-        let streamedText = ''
-        await consumeRunEvents(`/api/v1/workspaces/${options.workspaceId.value}/workflows/${options.workflowId.value}/runs/${result.value.id}/events`, event => {
-          if (event.type === 'token') {
-            streamedText += String(event.delta || '')
-            result.value = { ...result.value, status: 'running', outputs: { text: streamedText } }
-          } else if (event.status && ['run_started', 'run_finished'].includes(String(event.type))) {
-            result.value = { ...result.value, status: event.status }
-          }
-        })
-        result.value = (await api.get(`/workspaces/${options.workspaceId.value}/workflows/${options.workflowId.value}/runs/${result.value.id}`)).data
-      }
+      const created = (await api.post(path, { inputs })).data
+      if (runTargetNodeId.value) result.value = created
+      else await followQueuedRun(created)
       applyRunOverlay(result.value)
       options.inspectorTab.value = 'run'
       await loadRuns()
@@ -158,6 +171,53 @@ export function useWorkflowRuns(options: WorkflowRunOptions) {
     } catch (cause: any) {
       runError.value = cause.response?.data?.detail || String(cause)
     } finally {
+      running.value = false
+    }
+  }
+
+  async function cancelRun() {
+    const runId = String(result.value?.id || '')
+    if (!runId || cancelingRun.value) return
+    cancelingRun.value = true
+    runError.value = ''
+    try {
+      const { data } = await api.post(
+        `/workspaces/${options.workspaceId.value}/workflows/${options.workflowId.value}/runs/${runId}/cancel`,
+      )
+      result.value = { ...result.value, ...data }
+      if (data.status === 'cancelled') {
+        running.value = false
+        applyRunOverlay(result.value)
+        await loadRuns()
+      }
+    } catch (cause: any) {
+      runError.value = cause.response?.data?.detail || String(cause)
+    } finally {
+      cancelingRun.value = false
+    }
+  }
+
+  async function retryRun() {
+    const runId = String(result.value?.id || selectedRun.value?.id || '')
+    if (!runId || retryingRun.value) return
+    retryingRun.value = true
+    running.value = true
+    runError.value = ''
+    try {
+      selectedRun.value = null
+      clearRunOverlay()
+      const { data } = await api.post(
+        `/workspaces/${options.workspaceId.value}/workflows/${options.workflowId.value}/runs/${runId}/retry`,
+      )
+      await followQueuedRun(data)
+      applyRunOverlay(result.value)
+      options.inspectorTab.value = 'run'
+      await loadRuns()
+      if (result.value.status === 'waiting') await openApprovals(result.value.id)
+    } catch (cause: any) {
+      runError.value = cause.response?.data?.detail || String(cause)
+    } finally {
+      retryingRun.value = false
       running.value = false
     }
   }
@@ -208,6 +268,8 @@ export function useWorkflowRuns(options: WorkflowRunOptions) {
     approvalComment,
     approvals,
     applyRunOverlay,
+    cancelingRun,
+    cancelRun,
     clearRunOverlay,
     exitReplayMode,
     loadApprovals,
@@ -219,6 +281,8 @@ export function useWorkflowRuns(options: WorkflowRunOptions) {
     pendingApprovals,
     replayMode,
     replayRun,
+    retryingRun,
+    retryRun,
     respondingApproval,
     respondApproval,
     result,

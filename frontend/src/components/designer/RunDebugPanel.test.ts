@@ -66,4 +66,31 @@ describe('RunDebugPanel', () => {
     expect(wrapper.find('form').exists()).toBe(false)
     expect(wrapper.findAll('nav button')).toHaveLength(3)
   })
+
+  it('offers cancellation for an active run and retry for a completed run', async () => {
+    const wrapper = mount(RunDebugPanel, {
+      props: {
+        open: true,
+        title: 'Controlled Run',
+        fields: [],
+        inputs: {},
+        uploadingField: '',
+        result: { id: 'run-3', status: 'running', outputs: {}, trace: [] },
+        error: '',
+        running: true,
+      },
+      global: { plugins: [i18n], stubs: { AlertBanner: true } },
+    })
+    const cancel = wrapper.findAll('button').find(button => button.text().includes('停止运行'))
+    expect(cancel).toBeTruthy()
+    await cancel!.trigger('click')
+    expect(wrapper.emitted('cancel')).toHaveLength(1)
+
+    await wrapper.setProps({ result: { id: 'run-3', status: 'failed', outputs: {}, trace: [] }, running: false })
+    await wrapper.findAll('nav button').find(button => button.text().includes('输出'))!.trigger('click')
+    const retry = wrapper.findAll('button').find(button => button.text().includes('重新运行'))
+    expect(retry).toBeTruthy()
+    await retry!.trigger('click')
+    expect(wrapper.emitted('retry')).toHaveLength(1)
+  })
 })

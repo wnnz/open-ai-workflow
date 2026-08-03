@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from contextlib import suppress
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 
@@ -15,6 +16,14 @@ from app.core.database import SessionLocal, engine
 from app.models.entities import Workflow, WorkflowApproval, WorkflowRun, WorkflowVersion
 from app.observability import configure_logging, configure_otel, deliver_alert, record_node_event
 from app.services.model_providers import load_model_provider_runtimes
+from app.services.run_control import (
+    claim_workflow_run,
+    clear_run_cancellation,
+    extend_workflow_run_lease,
+    new_task_id,
+    recover_stale_workflow_runs,
+    run_cancellation_requested,
+)
 from app.services.run_events import publish_run_event
 from app.services.sandbox_artifacts import consume_sandbox_artifacts, sandbox_schema_value
 from app.services.scheduling import next_schedule_at, schedule_inputs
@@ -27,9 +36,10 @@ from app.services.script_test_events import (
 )
 from app.services.scripts import validate_inputs
 from app.services.task_queue import enqueue_workflow_run
-from app.services.workflow_engine import WorkflowPause, execute_graph
+from app.services.workflow_engine import WorkflowCancelled, WorkflowPause, execute_graph
 from app.services.workflow_environment import build_system_variables, load_workflow_environment
 from app.services.workflow_files import (
+    cleanup_file_lifecycle,
     hydrate_file_references,
     materialize_generated_files,
     strip_internal_file_metadata,
@@ -69,6 +79,7 @@ async def _materialize_script_test_files(
             download_url=lambda file_id: (
                 f"/api/v1/workspaces/{workspace_id}/scripts/tests/{task_id}/files/{file_id}"
             ),
+            purpose="script_test_output",
         )
         await db.commit()
         return materialized
@@ -149,16 +160,16 @@ def execute_run(run_id: str, approval_id: str | None = None) -> str:
 
 async def _execute_run(run_id: str, approval_id: str | None = None) -> str:
     async with SessionLocal() as db:
-        run = await db.get(WorkflowRun, run_id)
-        if not run or run.status not in {"pending", "running"}:
+        claimed = await claim_workflow_run(db, run_id)
+        if not claimed:
             return "ignored"
+        run, lease_token = claimed
         approval = await db.get(WorkflowApproval, approval_id) if approval_id else None
         graph = deepcopy(approval.graph if approval else run.execution_graph)
         resume_state = deepcopy(approval.resume_state) if approval else None
-        run.status = "running"
-        run.error = None
-        await db.commit()
-        publish_run_event(run.id, {"type": "run_started", "status": "running"})
+        publish_run_event(run_id, {"type": "run_started", "status": "running"})
+        heartbeat = asyncio.create_task(_heartbeat_run(run_id, lease_token))
+        superseded = False
         try:
             workflow = await db.get(Workflow, run.workflow_id)
             if not workflow:
@@ -168,14 +179,15 @@ async def _execute_run(run_id: str, approval_id: str | None = None) -> str:
             hydrated_inputs = await hydrate_file_references(db, run.workspace_id, run.inputs)
             system = build_system_variables(
                 workflow_id=run.workflow_id,
-                run_id=run.id,
+                run_id=run_id,
                 user_id=run.trigger_user_id or run.created_by,
             )
             with trace.get_tracer(__name__).start_as_current_span(
                 "workflow.run",
-                attributes={"workflow.id": run.workflow_id, "run.id": run.id},
+                attributes={"workflow.id": run.workflow_id, "run.id": run_id},
             ):
-                outputs, node_trace = execute_graph(
+                outputs, node_trace = await asyncio.to_thread(
+                    execute_graph,
                     graph,
                     hydrated_inputs,
                     resume_state=resume_state,
@@ -183,58 +195,111 @@ async def _execute_run(run_id: str, approval_id: str | None = None) -> str:
                     system=system,
                     model_providers=model_providers,
                     event_callback=lambda event: (
-                        record_node_event(event), publish_run_event(run.id, event)
+                        record_node_event(event), publish_run_event(run_id, event)
+                    ),
+                    cancellation_callback=lambda: run_cancellation_requested(run_id),
+                )
+            await db.refresh(run)
+            if run.lease_token != lease_token or run.status not in {"running", "cancelling"}:
+                superseded = True
+            elif run.status == "cancelling" or run.cancel_requested_at:
+                raise WorkflowCancelled("Workflow run was cancelled")
+            public_run = run.triggered_by in {"form", "api", "webhook"}
+            if not superseded:
+                run.outputs, run.trace = await materialize_generated_files(
+                    db,
+                    workspace_id=run.workspace_id,
+                    created_by=run.created_by or workflow.created_by,
+                    outputs=outputs,
+                    trace=node_trace,
+                    download_url=(
+                        lambda file_id: f"/v1/apps/{workflow.slug}/runs/{run_id}/files/{file_id}"
+                        if public_run
+                        else f"/api/v1/workspaces/{run.workspace_id}/workflows/{run.workflow_id}/runs/{run_id}/files/{file_id}"
                     ),
                 )
-            public_run = run.triggered_by in {"form", "api", "webhook"}
-            run.outputs, run.trace = await materialize_generated_files(
-                db,
-                workspace_id=run.workspace_id,
-                created_by=run.created_by or workflow.created_by,
-                outputs=outputs,
-                trace=node_trace,
-                download_url=(
-                    lambda file_id: f"/v1/apps/{workflow.slug}/runs/{run.id}/files/{file_id}"
-                    if public_run
-                    else f"/api/v1/workspaces/{run.workspace_id}/workflows/{run.workflow_id}/runs/{run.id}/files/{file_id}"
-                ),
-            )
-            run.status = "succeeded"
-            run.finished_at = datetime.now(UTC)
+                await db.refresh(
+                    run,
+                    attribute_names=["lease_token", "status", "cancel_requested_at"],
+                )
+                if run.lease_token != lease_token:
+                    superseded = True
+                elif run.status == "cancelling" or run.cancel_requested_at:
+                    raise WorkflowCancelled("Workflow run was cancelled")
+            if not superseded:
+                run.status = "succeeded"
+                run.finished_at = datetime.now(UTC)
         except WorkflowPause as pause:
-            waiting = WorkflowApproval(
-                workspace_id=run.workspace_id,
-                workflow_id=run.workflow_id,
-                run_id=run.id,
-                node_id=pause.node_id,
-                request=pause.request,
-                graph=graph,
-                resume_state=pause.resume_state,
-                expires_at=datetime.now(UTC)
-                + timedelta(minutes=int(pause.request.get("timeout_minutes", 4320))),
-            )
-            db.add(waiting)
-            await db.flush()
-            run.status = "waiting"
-            run.trace = strip_internal_file_metadata([
-                *pause.resume_state.get("trace", []),
-                {
-                    "node_id": pause.node_id,
-                    "node_type": "human",
-                    "status": "waiting",
-                    "output": {"approval_id": waiting.id},
-                    "error": None,
-                    "attempts": 0,
-                    "error_handled": False,
-                    "started_at": datetime.now(UTC).isoformat(),
-                    "finished_at": None,
-                },
-            ])
+            await db.refresh(run)
+            if run.lease_token != lease_token or run.status not in {"running", "cancelling"}:
+                superseded = True
+            elif run.status == "cancelling" or run.cancel_requested_at:
+                run.status = "cancelled"
+                run.error = None
+                run.finished_at = datetime.now(UTC)
+            else:
+                waiting = WorkflowApproval(
+                    workspace_id=run.workspace_id,
+                    workflow_id=run.workflow_id,
+                    run_id=run.id,
+                    node_id=pause.node_id,
+                    request=pause.request,
+                    graph=graph,
+                    resume_state=pause.resume_state,
+                    expires_at=datetime.now(UTC)
+                    + timedelta(minutes=int(pause.request.get("timeout_minutes", 4320))),
+                )
+                db.add(waiting)
+                await db.flush()
+                run.status = "waiting"
+                run.trace = strip_internal_file_metadata([
+                    *pause.resume_state.get("trace", []),
+                    {
+                        "node_id": pause.node_id,
+                        "node_type": "human",
+                        "status": "waiting",
+                        "output": {"approval_id": waiting.id},
+                        "error": None,
+                        "attempts": 0,
+                        "error_handled": False,
+                        "started_at": datetime.now(UTC).isoformat(),
+                        "finished_at": None,
+                    },
+                ])
+        except WorkflowCancelled:
+            await db.rollback()
+            current = await db.get(WorkflowRun, run_id)
+            if not current or current.lease_token != lease_token:
+                superseded = True
+            else:
+                run = current
+                run.status = "cancelled"
+                run.error = None
+                run.finished_at = datetime.now(UTC)
         except Exception as exc:
-            logger.exception("Workflow run failed", extra={"run_id": run.id})
-            run.status = "failed"
-            run.error = str(exc)
-            run.finished_at = datetime.now(UTC)
+            logger.exception("Workflow run failed", extra={"run_id": run_id})
+            await db.rollback()
+            current = await db.get(WorkflowRun, run_id)
+            if not current or current.lease_token != lease_token:
+                superseded = True
+            elif current.status == "cancelling" or current.cancel_requested_at:
+                run = current
+                run.status = "cancelled"
+                run.error = None
+                run.finished_at = datetime.now(UTC)
+            else:
+                run = current
+                run.status = "failed"
+                run.error = str(exc)
+                run.finished_at = datetime.now(UTC)
+        finally:
+            heartbeat.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat
+        if superseded:
+            return "ignored"
+        run.lease_token = None
+        run.lease_expires_at = None
         await db.commit()
         if run.status == "failed":
             deliver_alert(
@@ -253,7 +318,31 @@ async def _execute_run(run_id: str, approval_id: str | None = None) -> str:
                 "error": run.error,
             },
         )
+        clear_run_cancellation(run_id)
         return run.status
+
+
+async def _heartbeat_run(run_id: str, lease_token: str) -> None:
+    interval = max(5, get_settings().workflow_run_lease_seconds // 3)
+    while True:
+        await asyncio.sleep(interval)
+        if not await extend_workflow_run_lease(run_id, lease_token):
+            return
+
+
+@celery.task(name="workflow.recover_runs")
+def recover_runs() -> dict[str, int]:
+    requeued, finished = asyncio.run(_run_and_dispose(recover_stale_workflow_runs()))
+    return {"requeued": len(requeued), "finished": len(finished)}
+
+
+@celery.task(name="storage.cleanup_files")
+def cleanup_files() -> dict[str, int]:
+    async def execute() -> dict[str, int]:
+        async with SessionLocal() as db:
+            return await cleanup_file_lifecycle(db)
+
+    return asyncio.run(_run_and_dispose(execute()))
 
 
 @celery.task(name="workflow.dispatch_schedules")
@@ -263,7 +352,7 @@ def dispatch_schedules() -> int:
 
 async def _dispatch_schedules() -> int:
     now = datetime.now(UTC)
-    run_ids: list[str] = []
+    queued_runs: list[tuple[str, str]] = []
     async with SessionLocal() as db:
         workflows = list(
             (
@@ -305,11 +394,12 @@ async def _dispatch_schedules() -> int:
                 execution_graph=await hydrate_script_resources(
                     db, version.graph, version.resolved_references
                 ),
+                task_id=new_task_id(),
             )
             db.add(run)
             await db.flush()
-            run_ids.append(run.id)
+            queued_runs.append((run.id, run.task_id))
         await db.commit()
-    for run_id in run_ids:
-        await enqueue_workflow_run(run_id)
-    return len(run_ids)
+    for run_id, task_id in queued_runs:
+        await enqueue_workflow_run(run_id, task_id=task_id)
+    return len(queued_runs)

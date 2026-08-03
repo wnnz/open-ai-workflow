@@ -3,11 +3,10 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentUser, DbSession
-from app.core.config import get_settings
 from app.core.security import decrypt_secret, encrypt_secret, hash_password
 from app.models.entities import (
     ModelProvider,
@@ -42,12 +41,16 @@ from app.schemas.workflow import (
 )
 from app.services.builtin_scripts import ensure_english_exam_answer_filler_script
 from app.services.model_providers import load_model_provider_runtimes
-from app.services.run_events import stream_run_events
+from app.services.run_control import (
+    RETRYABLE_RUN_STATUSES,
+    enqueue_persisted_workflow_run,
+    new_task_id,
+    signal_run_cancellation,
+)
+from app.services.run_events import publish_run_event, stream_run_events
 from app.services.scheduling import next_schedule_at
 from app.services.script_runtime import hydrate_script_resources
 from app.services.storage import object_path
-from app.services.task_queue import enqueue_workflow_run
-from app.services.uploads import store_upload
 from app.services.workflow_engine import (
     execute_node_preview,
     resolve_script_references,
@@ -58,8 +61,11 @@ from app.services.workflow_engine import (
 from app.services.workflow_environment import build_system_variables, load_workflow_environment
 from app.services.workflow_files import (
     contains_file_id,
+    create_uploaded_file,
+    extend_file_retention,
     hydrate_file_references,
     materialize_generated_files,
+    stored_file_available,
 )
 from app.services.workflow_templates import (
     ENGLISH_EXAM_TEMPLATE_ID,
@@ -418,20 +424,13 @@ async def upload_workflow_file(
 ) -> StoredFile:
     await require_role(db, workspace_id, user.id)
     await get_workflow(db, workspace_id, workflow_id)
-    key, digest, size = await store_upload(
-        workspace_id, file, get_settings().max_upload_bytes
-    )
-    stored = StoredFile(
+    stored = await create_uploaded_file(
+        db,
         workspace_id=workspace_id,
-        object_key=key,
-        filename=file.filename or "file",
-        content_type=file.content_type or "application/octet-stream",
-        size=size,
-        sha256=digest,
         created_by=user.id,
+        file=file,
+        purpose="workflow_input",
     )
-    db.add(stored)
-    await db.flush()
     db.add(audit(workspace_id, user.id, "workflow.file_uploaded", "file", stored.id))
     await db.commit()
     await db.refresh(stored)
@@ -697,6 +696,7 @@ async def run_draft(
     )
     execution_graph = await hydrate_script_resources(db, execution_graph)
     validate_run_inputs(execution_graph, payload.inputs)
+    await extend_file_retention(db, workspace_id, payload.inputs)
     run = WorkflowRun(
         workspace_id=workspace_id,
         workflow_id=workflow_id,
@@ -704,13 +704,13 @@ async def run_draft(
         inputs=payload.inputs,
         execution_graph=execution_graph,
         created_by=user.id,
+        task_id=new_task_id(),
     )
     db.add(run)
     await db.flush()
     await db.commit()
     await db.refresh(run)
-    if await enqueue_workflow_run(run.id):
-        await db.refresh(run)
+    await enqueue_persisted_workflow_run(db, run)
     return run
 
 
@@ -800,11 +800,14 @@ async def respond_to_approval(
     approval.resume_state = resume_state
     run.status = "pending"
     run.error = None
+    run.task_id = new_task_id()
+    run.cancel_requested_at = None
+    run.lease_token = None
+    run.lease_expires_at = None
     db.add(audit(workspace_id, user.id, "workflow.approval_responded", "workflow_run", run.id, {"approval_id": approval.id, "action_id": payload.action_id}))
     await db.commit()
     await db.refresh(run)
-    if await enqueue_workflow_run(run.id, approval.id):
-        await db.refresh(run)
+    await enqueue_persisted_workflow_run(db, run, approval.id)
     return run
 
 
@@ -837,6 +840,8 @@ async def run_draft_node(
         triggered_by="node",
         inputs=payload.inputs,
         created_by=user.id,
+        started_at=datetime.now(UTC),
+        attempt_count=1,
     )
     db.add(run)
     await db.flush()
@@ -898,6 +903,9 @@ async def list_runs(
                 WorkflowRun.status,
                 WorkflowRun.triggered_by,
                 WorkflowRun.error,
+                WorkflowRun.retry_of_run_id,
+                WorkflowRun.started_at,
+                WorkflowRun.cancel_requested_at,
                 WorkflowRun.created_at,
                 WorkflowRun.finished_at,
             )
@@ -909,6 +917,120 @@ async def list_runs(
     ).mappings().all()
     items = [RunSummaryOut.model_validate(dict(row)) for row in rows]
     return RunPage(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.post("/{workflow_id}/runs/{run_id}/cancel", response_model=RunOut)
+async def cancel_run(
+    workspace_id: str,
+    workflow_id: str,
+    run_id: str,
+    db: DbSession,
+    user: CurrentUser,
+) -> WorkflowRun:
+    await require_role(db, workspace_id, user.id, "editor")
+    run = await db.get(WorkflowRun, run_id)
+    if not run or run.workspace_id != workspace_id or run.workflow_id != workflow_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Workflow run not found")
+    if run.status == "cancelled":
+        return run
+    if run.status in {"succeeded", "failed"}:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Workflow run has already finished")
+
+    now = datetime.now(UTC)
+    if run.status in {"running", "cancelling"}:
+        signal_run_cancellation(run.id)
+        run.status = "cancelling"
+        run.cancel_requested_at = run.cancel_requested_at or now
+    else:
+        run.status = "cancelled"
+        run.cancel_requested_at = now
+        run.finished_at = now
+        run.lease_token = None
+        run.lease_expires_at = None
+        await db.execute(
+            update(WorkflowApproval)
+            .where(
+                WorkflowApproval.run_id == run.id,
+                WorkflowApproval.status == "pending",
+            )
+            .values(status="cancelled", responded_at=now)
+        )
+    db.add(
+        audit(
+            workspace_id,
+            user.id,
+            "workflow.run_cancelled",
+            "workflow_run",
+            run.id,
+        )
+    )
+    await db.commit()
+    await db.refresh(run)
+    if run.status == "cancelled":
+        publish_run_event(
+            run.id,
+            {"type": "run_finished", "status": "cancelled", "error": None},
+        )
+    else:
+        publish_run_event(run.id, {"type": "status", "status": "cancelling"})
+    return run
+
+
+@router.post(
+    "/{workflow_id}/runs/{run_id}/retry",
+    response_model=RunOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def retry_run(
+    workspace_id: str,
+    workflow_id: str,
+    run_id: str,
+    db: DbSession,
+    user: CurrentUser,
+) -> WorkflowRun:
+    await require_role(db, workspace_id, user.id, "editor")
+    original = await db.get(WorkflowRun, run_id)
+    if (
+        not original
+        or original.workspace_id != workspace_id
+        or original.workflow_id != workflow_id
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Workflow run not found")
+    if original.status not in RETRYABLE_RUN_STATUSES:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Only completed or cancelled workflow runs can be retried",
+        )
+    await extend_file_retention(db, workspace_id, original.inputs)
+    run = WorkflowRun(
+        workspace_id=workspace_id,
+        workflow_id=workflow_id,
+        workflow_version_id=original.workflow_version_id,
+        status="pending",
+        triggered_by="retry",
+        trigger_user_id=original.trigger_user_id,
+        inputs=deepcopy(original.inputs),
+        execution_graph=deepcopy(original.execution_graph),
+        created_by=user.id,
+        retry_of_run_id=original.id,
+        task_id=new_task_id(),
+    )
+    db.add(run)
+    await db.flush()
+    db.add(
+        audit(
+            workspace_id,
+            user.id,
+            "workflow.run_retried",
+            "workflow_run",
+            run.id,
+            {"retry_of_run_id": original.id},
+        )
+    )
+    await db.commit()
+    await db.refresh(run)
+    await enqueue_persisted_workflow_run(db, run)
+    return run
 
 
 @router.get("/{workflow_id}/runs/{run_id}", response_model=RunOut)
@@ -944,6 +1066,7 @@ async def download_run_file(
         or run.workflow_id != workflow_id
         or not stored
         or stored.workspace_id != workspace_id
+        or not stored_file_available(stored)
         or not contains_file_id(run.outputs, file_id)
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Workflow output file not found")

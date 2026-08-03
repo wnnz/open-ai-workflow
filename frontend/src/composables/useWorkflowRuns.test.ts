@@ -1,11 +1,13 @@
 import { computed, ref } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import api from '@/api/client'
+import { consumeRunEvents } from '@/api/runEvents'
 import { useWorkflowRuns } from './useWorkflowRuns'
 
 vi.mock('@/api/client', () => ({
   default: { get: vi.fn(), post: vi.fn() },
 }))
+vi.mock('@/api/runEvents', () => ({ consumeRunEvents: vi.fn() }))
 
 describe('useWorkflowRuns', () => {
   beforeEach(() => vi.clearAllMocks())
@@ -89,5 +91,61 @@ describe('useWorkflowRuns', () => {
     expect(workflowRuns.selectedResult.value).toEqual(trace)
     expect(nodes.value.every(node => node.data.runtimeStatus === undefined)).toBe(true)
     expect(commitEdges).not.toHaveBeenCalled()
+  })
+
+  it('cancels the active run and refreshes history', async () => {
+    vi.mocked(api.post).mockResolvedValueOnce({ data: { id: 'run-1', status: 'cancelled', cancel_requested_at: '2026-08-03T00:00:00Z' } })
+    vi.mocked(api.get).mockResolvedValueOnce({ data: { items: [{ id: 'run-1', status: 'cancelled' }] } })
+    const workflowRuns = useWorkflowRuns({
+      workspaceId: computed(() => 'workspace-1'),
+      workflowId: computed(() => 'workflow-1'),
+      startFields: computed(() => []),
+      nodes: ref<any[]>([]),
+      selected: ref<any>(null),
+      inspectorTab: ref('settings'),
+      activeSection: ref('logs'),
+      currentEdges: () => [],
+      commitEdges: vi.fn(),
+      fitView: vi.fn(),
+    })
+    workflowRuns.result.value = { id: 'run-1', status: 'running' }
+
+    await workflowRuns.cancelRun()
+
+    expect(api.post).toHaveBeenCalledWith('/workspaces/workspace-1/workflows/workflow-1/runs/run-1/cancel')
+    expect(workflowRuns.result.value.status).toBe('cancelled')
+    expect(workflowRuns.runs.value[0].status).toBe('cancelled')
+  })
+
+  it('retries a historical run and follows the new run to completion', async () => {
+    vi.mocked(api.post).mockResolvedValueOnce({ data: { id: 'run-2', status: 'pending', retry_of_run_id: 'run-1' } })
+    vi.mocked(consumeRunEvents).mockImplementationOnce(async (_url, onEvent) => { onEvent({ type: 'run_finished', status: 'succeeded' }) })
+    vi.mocked(api.get)
+      .mockResolvedValueOnce({ data: { id: 'run-2', status: 'succeeded', outputs: {}, trace: [] } })
+      .mockResolvedValueOnce({ data: { items: [{ id: 'run-2', status: 'succeeded' }] } })
+    const workflowRuns = useWorkflowRuns({
+      workspaceId: computed(() => 'workspace-1'),
+      workflowId: computed(() => 'workflow-1'),
+      startFields: computed(() => []),
+      nodes: ref<any[]>([]),
+      selected: ref<any>(null),
+      inspectorTab: ref('settings'),
+      activeSection: ref('logs'),
+      currentEdges: () => [],
+      commitEdges: vi.fn(),
+      fitView: vi.fn(),
+    })
+    workflowRuns.result.value = { id: 'run-1', status: 'failed' }
+    workflowRuns.selectedRun.value = workflowRuns.result.value
+
+    await workflowRuns.retryRun()
+
+    expect(api.post).toHaveBeenCalledWith('/workspaces/workspace-1/workflows/workflow-1/runs/run-1/retry')
+    expect(consumeRunEvents).toHaveBeenCalledWith(
+      '/api/v1/workspaces/workspace-1/workflows/workflow-1/runs/run-2/events',
+      expect.any(Function),
+    )
+    expect(workflowRuns.result.value.status).toBe('succeeded')
+    expect(workflowRuns.replayMode.value).toBe(false)
   })
 })

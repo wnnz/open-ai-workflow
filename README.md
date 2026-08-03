@@ -25,8 +25,8 @@ Ordo 是一个可自托管的、多工作区 AI 工作流平台。它把可视�
 | 工作室 | 多工作区、工作流卡片、草稿/已发布筛选、搜索和发布状态管理 |
 | 可视化设计器 | 通过 Vue Flow 连接开始、结束、条件、分类、LLM、图片、模板、代码、脚本、HTTP、文档、循环和人工审批等节点 |
 | 版本与发布 | 草稿自动保存、版本历史、恢复、发布备注、公开/受保护访问策略 |
-| 运行时 | Celery 队列、节点级执行、SSE 运行事件、运行历史、节点轨迹、输出下载 |
-| 公开应用 | 表单、API、Webhook 入口；工作流 slug 作为稳定的公开地址 |
+| 运行时 | Celery 队列、原子任务领取、运行租约恢复、取消/重试、SSE 运行事件、运行历史、节点轨迹、输出下载 |
+| 公开应用 | 表单、API、Webhook 入口；限流、并发配额和幂等提交；工作流 slug 作为稳定的公开地址 |
 | Python 脚本 | 多文件 `.py`/ZIP、入口函数、JSON Schema 输入输出、异步测试、日志、取消、版本差异和恢复 |
 | 模型供应商 | OpenAI-compatible 连接、模型目录、连接测试、工作流引用和能力配置 |
 | 文档处理 | DOCX 文本/图片提取，以及按稳定段落锚点插入答案并下载生成文件 |
@@ -73,7 +73,7 @@ flowchart LR
     Engine --> Models[模型供应商]
     Engine --> Sandbox["sandbox<br/>受限脚本执行"]
     Sandbox --> Runtime["临时 Python Runtime<br/>无网络、资源限制"]
-    Beat["beat<br/>可选调度器"] --> Redis
+    Beat["beat<br/>调度与维护"] --> Redis
 ```
 
 一次工作流运行的生命周期是：
@@ -90,7 +90,7 @@ flowchart LR
 | `web` | Vue 静态资源与前端入口 | `5173` |
 | `api` | 管理 API、公开应用 API、Swagger | `8000` |
 | `worker` | 工作流和脚本测试执行 | 内部服务 |
-| `beat` | 定时工作流派发，可选 profile | 内部服务 |
+| `beat` | 定时工作流派发、运行租约恢复和文件清理 | 内部服务 |
 | `postgres` | 工作区、工作流、运行记录和向量数据 | 内部服务 |
 | `redis` | Celery broker/backend 与运行事件 | 内部服务 |
 | `sandbox` | 受限 Python 执行控制面 | 内部服务 |
@@ -120,12 +120,6 @@ docker compose ps
 - API 文档：<http://localhost:8000/docs>
 - 健康检查：<http://localhost:8000/health>
 - 指标：<http://localhost:8000/metrics>
-
-定时工作流需要额外启动 beat：
-
-```powershell
-docker compose --profile schedule up -d beat
-```
 
 停止服务但保留卷：
 
@@ -211,10 +205,15 @@ $body = @{ inputs = @{ message = "请总结本周工单" } } | ConvertTo-Json
 Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:5173/v1/apps/<app-slug>/run" `
-  -Headers @{ Authorization = "Bearer owf_<workspace-api-key>" } `
+  -Headers @{
+    Authorization = "Bearer owf_<workspace-api-key>"
+    "Idempotency-Key" = [guid]::NewGuid().ToString()
+  } `
   -ContentType "application/json" `
   -Body $body
 ```
+
+对表单、API 和 Webhook 的每次业务提交使用唯一的 `Idempotency-Key`；同一个 key 和相同请求会返回原运行，不同请求会返回 `409`。公共访问授权、上传和运行分别限流，每个应用还限制同时处于 `pending`、`running` 或 `cancelling` 的运行数量。
 
 API key 通过管理端点创建，明文只在创建响应中返回：
 
@@ -239,6 +238,15 @@ POST /api/v1/workspaces/{workspace_id}/api-keys
 | `SANDBOX_URL` | sandbox 控制面地址 | 脚本节点依赖 |
 | `SANDBOX_SHARED_SECRET` | API 与 sandbox 间共享密钥 | 与应用密钥分开 |
 | `MAX_REQUEST_BODY_BYTES` | 请求体大小上限 | 默认 50 MiB |
+| `PUBLIC_*_RATE_LIMIT_REQUESTS` | 公共访问、上传和运行限流 | 默认每 60 秒 10/10/30 次，设为 `0` 可关闭对应限制 |
+| `PUBLIC_RATE_LIMIT_WINDOW_SECONDS` | 公共入口限流窗口 | 默认 60 秒 |
+| `PUBLIC_MAX_ACTIVE_RUNS_PER_APP` | 单个公开应用并发运行配额 | 默认 10 |
+| `WORKFLOW_RUN_LEASE_SECONDS` | worker 运行租约 | 默认 120 秒，心跳续期 |
+| `WORKFLOW_PENDING_RECOVERY_SECONDS` | 未领取任务重新入队阈值 | 默认 60 秒 |
+| `FILE_UPLOAD_RETENTION_HOURS` | 未使用上传文件保留时间 | 默认 24 小时 |
+| `FILE_OUTPUT_RETENTION_DAYS` | 运行输入和输出文件保留时间 | 默认 30 天 |
+| `FILE_ORPHAN_GRACE_HOURS` | 孤儿物理文件清理宽限期 | 默认 24 小时 |
+| `FILE_CLEANUP_BATCH_SIZE` | 单次文件清理数量上限 | 默认 500 |
 | `CORS_ORIGINS` | 允许的前端来源 | 生产环境请收紧 |
 | `HOST_HTTP_PROXY` / `CONTAINER_HTTP_PROXY` | 依赖安装和镜像构建代理 | 无代理时可清空 |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/HTTP trace 导出 | 可选 |
@@ -251,8 +259,8 @@ POST /api/v1/workspaces/{workspace_id}/api-keys
 
 ```powershell
 Set-Location backend
-.\.venv\Scripts\python.exe -I -m pytest tests -p no:cacheprovider
-.\.venv\Scripts\python.exe -I -m ruff check app tests
+.\.venv\Scripts\python.exe -m pytest tests -p no:cacheprovider
+.\.venv\Scripts\python.exe -m ruff check app tests
 ```
 
 前端测试和构建：
@@ -280,8 +288,10 @@ alembic upgrade head
 - 每次脚本执行使用独立的临时容器层，不与其他任务共享卷；sandbox 不应访问数据库、Redis 或文件存储写端点。
 - 模型供应商凭据在数据库中加密保存，API 响应不返回明文；工作区资源的授权在服务端执行。
 - `file-data`、`postgres-data`、`redis-data` 和 `sandbox-artifacts` 是持久化卷。迁移、升级或清理前先做可恢复备份。
+- 文件清理任务每小时删除过期记录及物理文件，并回收超过宽限期的孤儿文件；已过期文件的下载和工作流引用都会返回不存在。
 - 生产部署请替换所有示例密钥，配置 HTTPS、收紧 `CORS_ORIGINS`，并将 `/metrics` 限制在监控网络内。
 - 运行创建后初始状态可能是 `pending`；以事件流和最终运行详情为准，不要把入队成功当成业务执行成功。
+- 运行可在 Studio 中取消；已成功、失败或取消的运行可基于原执行图和输入重试。重复投递只会有一个 worker 获得执行租约。
 
 ## 项目结构
 

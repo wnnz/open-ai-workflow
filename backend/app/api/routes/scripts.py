@@ -47,8 +47,12 @@ from app.services.scripts import (
     validate_script,
 )
 from app.services.storage import object_path
-from app.services.uploads import store_upload
-from app.services.workflow_files import contains_file_id, hydrate_file_references
+from app.services.workflow_files import (
+    contains_file_id,
+    create_uploaded_file,
+    hydrate_file_references,
+    stored_file_available,
+)
 from app.services.workspaces import audit, require_role, slugify
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/scripts", tags=["scripts"])
@@ -151,20 +155,13 @@ async def upload_script_test_file(
     file: UploadFile = File(...),
 ) -> StoredFile:
     await require_role(db, workspace_id, user.id, "editor")
-    key, digest, size = await store_upload(
-        workspace_id, file, get_settings().max_upload_bytes
-    )
-    stored = StoredFile(
+    stored = await create_uploaded_file(
+        db,
         workspace_id=workspace_id,
-        object_key=key,
-        filename=file.filename or "file",
-        content_type=file.content_type or "application/octet-stream",
-        size=size,
-        sha256=digest,
         created_by=user.id,
+        file=file,
+        purpose="script_test_input",
     )
-    db.add(stored)
-    await db.flush()
     db.add(audit(workspace_id, user.id, "script.test_file_uploaded", "file", stored.id))
     await db.commit()
     await db.refresh(stored)
@@ -273,7 +270,11 @@ async def download_script_test_file(
     if not contains_file_id(task.get("result") or {}, file_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "File is not part of this script test")
     stored = await db.get(StoredFile, file_id)
-    if not stored or stored.workspace_id != workspace_id:
+    if (
+        not stored
+        or stored.workspace_id != workspace_id
+        or not stored_file_available(stored)
+    ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "File not found")
     return FileResponse(
         object_path(stored.object_key),

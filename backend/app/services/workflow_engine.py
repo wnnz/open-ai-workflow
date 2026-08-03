@@ -42,6 +42,12 @@ EXECUTION_POLICY_NODE_TYPES = {
     "extract", "list", "http", "iteration", "loop",
     "delay", "subworkflow", "document", "answer_filler",
 }
+SUPPORTED_NODE_TYPES = {
+    "start", "end", "note", "llm", "image", "agent", "classifier", "code",
+    "script", "template", "variable", "json", "aggregate", "extract", "list",
+    "http", "condition", "human", "wait", "iteration", "loop", "delay",
+    "subworkflow", "document", "answer_filler",
+}
 
 
 class WorkflowPause(Exception):
@@ -52,6 +58,26 @@ class WorkflowPause(Exception):
         self.resume_state = resume_state
 
 
+class WorkflowCancelled(Exception):
+    pass
+
+
+def validate_supported_node_types(nodes: list[dict[str, Any]]) -> None:
+    for node in nodes:
+        node_type = node.get("type")
+        if node_type == "knowledge":
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "Knowledge nodes are no longer supported",
+            )
+        if node_type not in SUPPORTED_NODE_TYPES:
+            label = str(node_type) if node_type else "<missing>"
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"Unsupported node type: {label}",
+            )
+
+
 def node_reference_name(node: dict[str, Any]) -> str:
     return str(node.get("data", {}).get("label") or "").strip()
 
@@ -59,8 +85,6 @@ def node_reference_name(node: dict[str, Any]) -> str:
 def validate_node_names(nodes: list[dict[str, Any]]) -> None:
     names: set[str] = set()
     for node in nodes:
-        if node.get("type") == "knowledge":
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Knowledge nodes are no longer supported")
         name = node_reference_name(node)
         if not name:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Every node requires a name")
@@ -90,6 +114,7 @@ def validate_draft_graph(graph: dict[str, Any]) -> None:
     node_ids = [node.get("id") for node in nodes]
     if not node_ids or None in node_ids or len(set(node_ids)) != len(node_ids):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Graph requires unique node ids")
+    validate_supported_node_types(nodes)
     validate_node_names(nodes)
     top_level_nodes = [node for node in nodes if not node.get("parentNode")]
     if len([node for node in top_level_nodes if node.get("type") == "start"]) != 1:
@@ -124,6 +149,7 @@ def validate_graph(graph: dict[str, Any]) -> None:
     node_ids = [node.get("id") for node in nodes]
     if not node_ids or None in node_ids or len(set(node_ids)) != len(node_ids):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Graph requires unique node ids")
+    validate_supported_node_types(nodes)
     top_level_nodes = [node for node in nodes if not node.get("parentNode")]
     if not any(node.get("type") == "start" for node in top_level_nodes):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Graph requires a start node")
@@ -171,6 +197,8 @@ def validate_graph(graph: dict[str, Any]) -> None:
         validate_loop_config(loop_node.get("data", {}).get("config", {}))
     for wait_node in (node for node in nodes if node.get("type") == "wait"):
         validate_wait_config(wait_node.get("data", {}).get("config", {}))
+    for delay_node in (node for node in nodes if node.get("type") == "delay"):
+        validate_delay_config(delay_node.get("data", {}).get("config", {}))
     for policy_node in (node for node in nodes if node.get("type") in EXECUTION_POLICY_NODE_TYPES):
         validate_execution_policy(policy_node.get("data", {}).get("config", {}))
     node_types = {node.get("id"): node.get("type") for node in nodes}
@@ -461,6 +489,12 @@ def validate_loop_config(config: dict[str, Any]) -> None:
     maximum = config.get("max_iterations", 10)
     if not isinstance(maximum, int) or not 1 <= maximum <= 100:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid loop iteration limit")
+
+
+def validate_delay_config(config: dict[str, Any]) -> None:
+    seconds = config.get("seconds", 1)
+    if not isinstance(seconds, (int, float)) or not 0 <= seconds <= 86_400:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid delay duration")
 
 
 def validate_wait_config(config: dict[str, Any]) -> None:
@@ -1036,7 +1070,14 @@ def checkpoint_context(context: dict[str, Any]) -> dict[str, Any]:
     checkpoint = deepcopy(context)
     checkpoint.pop("__model_providers__", None)
     checkpoint.pop("__event_callback__", None)
+    checkpoint.pop("__cancellation_callback__", None)
     return checkpoint
+
+
+def ensure_workflow_not_cancelled(context: dict[str, Any]) -> None:
+    callback = context.get("__cancellation_callback__")
+    if callable(callback) and callback():
+        raise WorkflowCancelled("Workflow run was cancelled")
 
 
 def execute_graph(
@@ -1045,6 +1086,7 @@ def execute_graph(
     system: dict[str, Any] | None = None,
     model_providers: dict[str, dict[str, Any]] | None = None,
     event_callback: Callable[[dict[str, Any]], None] | None = None,
+    cancellation_callback: Callable[[], bool] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Execute a validated workflow graph with runtime-only provider credentials."""
     validate_graph(graph)
@@ -1053,7 +1095,12 @@ def execute_graph(
         node.get("type") in {"human", "subworkflow"} and not node.get("parentNode")
         for node in graph.get("nodes", [])
     )
-    if not resume_state and not pause_capable and event_callback is None:
+    if (
+        not resume_state
+        and not pause_capable
+        and event_callback is None
+        and cancellation_callback is None
+    ):
         return execute_parallel_graph(
             graph,
             inputs,
@@ -1082,6 +1129,7 @@ def execute_graph(
         visited = int(resume_state.get("visited", 0))
         context["__model_providers__"] = model_providers or {}
         context["__event_callback__"] = event_callback
+        context["__cancellation_callback__"] = cancellation_callback
     else:
         queue = deque(node_id for node_id in nodes if incoming[node_id] == 0)
         context: dict[str, Any] = {
@@ -1090,11 +1138,13 @@ def execute_graph(
             "sys": deepcopy(system or {}),
             "__model_providers__": model_providers or {},
             "__event_callback__": event_callback,
+            "__cancellation_callback__": cancellation_callback,
         }
         reachable = {node_id for node_id, node in nodes.items() if node.get("type") == "start"}
         trace: list[dict[str, Any]] = []
         visited = 0
     while queue:
+        ensure_workflow_not_cancelled(context)
         node_id = queue.popleft()
         node = nodes[node_id]
         node_type = node.get("type")
@@ -1152,6 +1202,7 @@ def execute_graph(
                     },
                 ) from pause
             store_node_output(context, node, output, graph)
+            ensure_workflow_not_cancelled(context)
             finished = datetime.now(UTC)
             duration_ms = (finished - started).total_seconds() * 1000
             trace.append(
@@ -1242,6 +1293,7 @@ def execute_container_body(
     visited = 0
     last_output: Any = None
     while queue:
+        ensure_workflow_not_cancelled(context)
         node_id = queue.popleft()
         node = children[node_id]
         output = None
@@ -1284,6 +1336,7 @@ def execute_container_node(
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Iteration source must resolve to an array")
         item_variable = str(raw_config.get("item_variable", "item"))
         def run_item(index_item: tuple[int, Any]) -> Any:
+            ensure_workflow_not_cancelled(context)
             index, item = index_item
             nested_context = deepcopy(context)
             nested_context[item_variable] = item
@@ -1304,6 +1357,7 @@ def execute_container_node(
     iterations = 0
     loop_context = deepcopy(context)
     for index in range(maximum):
+        ensure_workflow_not_cancelled(loop_context)
         store_node_output(loop_context, node, {"index": index, "iteration": index + 1, "previous": last_output}, graph)
         last_output, loop_context = execute_container_body(graph, node, loop_context)
         iterations = index + 1
@@ -1325,15 +1379,21 @@ def execute_node_with_policy(
     interval_seconds = float(retry.get("interval_seconds", 0))
     last_error: Exception | None = None
     for attempt in range(1, max_attempts + 1):
+        ensure_workflow_not_cancelled(context)
         try:
             output = execute_container_node(graph, node, context) if graph and node.get("type") in {"iteration", "loop"} else execute_node(node, context)
             return output, "succeeded", None, attempt
-        except WorkflowPause:
+        except (WorkflowPause, WorkflowCancelled):
             raise
         except Exception as exc:  # noqa: BLE001 - node boundaries intentionally isolate executor failures
             last_error = exc
             if attempt < max_attempts and interval_seconds:
-                sleep(interval_seconds)
+                remaining = interval_seconds
+                while remaining > 0:
+                    ensure_workflow_not_cancelled(context)
+                    interval = min(remaining, 0.25)
+                    sleep(interval)
+                    remaining -= interval
     assert last_error is not None
     error_message = workflow_error_message(last_error)
     strategy = config.get("error_strategy", "fail")
@@ -1428,6 +1488,14 @@ def execute_node(node: dict[str, Any], context: dict[str, Any]) -> Any:
         return extract_structured_parameters(config)
     if node_type == "http":
         return execute_http_request(config)
+    if node_type == "delay":
+        remaining = float(config.get("seconds", 1))
+        while remaining > 0:
+            ensure_workflow_not_cancelled(context)
+            interval = min(remaining, 0.25)
+            sleep(interval)
+            remaining -= interval
+        return {"seconds": float(config.get("seconds", 1))}
     if node_type == "document":
         return execute_document(config)
     if node_type == "answer_filler":
@@ -1464,6 +1532,7 @@ def execute_node(node: dict[str, Any], context: dict[str, Any]) -> Any:
             resume_state=child_resume,
             system=child_system,
             model_providers=context.get("__model_providers__", {}),
+            cancellation_callback=context.get("__cancellation_callback__"),
         )
         context.get("__subworkflow_resume__", {}).pop(node_id, None)
         return {**outputs, "outputs": outputs, "_trace": child_trace}
@@ -1486,11 +1555,10 @@ def execute_node(node: dict[str, Any], context: dict[str, Any]) -> Any:
             "comment": response.get("comment", ""),
             "responded_by": response.get("responded_by"),
         }
-    return {
-        "status": "deferred",
-        "message": f"Node type '{node_type}' requires an asynchronous worker",
-        "config": config,
-    }
+    raise HTTPException(
+        status.HTTP_422_UNPROCESSABLE_CONTENT,
+        f"Unsupported node type: {node_type or '<missing>'}",
+    )
 
 
 def require_model_runtime(

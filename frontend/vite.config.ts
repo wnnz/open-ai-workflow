@@ -13,4 +13,19 @@ export default defineConfig({
     port: 5173,
     proxy: { '/api': 'http://localhost:8000', '/v1': 'http://localhost:8000' },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vue-runtime': ['vue', 'vue-i18n', 'vue-router', 'pinia'],
+          'workflow-canvas': [
+            '@vue-flow/core',
+            '@vue-flow/background',
+            '@vue-flow/controls',
+            '@vue-flow/minimap',
+          ],
+        },
+      },
+    },
+  },
 })

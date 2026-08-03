@@ -9,7 +9,7 @@ import redis.asyncio as async_redis
 
 from app.core.config import get_settings
 
-TERMINAL_STATUSES = {"succeeded", "failed", "waiting"}
+TERMINAL_STATUSES = {"succeeded", "failed", "waiting", "cancelled"}
 logger = logging.getLogger(__name__)
 
 

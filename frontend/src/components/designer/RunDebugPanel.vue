@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { AlertCircle, CheckCircle2, Clock3, Play, X } from 'lucide-vue-next'
+import { AlertCircle, CheckCircle2, Clock3, Play, RotateCcw, Square, X } from 'lucide-vue-next'
 import AlertBanner from '@/components/ui/AlertBanner.vue'
 import WorkflowInputField from '@/components/WorkflowInputField.vue'
 import WorkflowOutputRenderer from '@/components/WorkflowOutputRenderer.vue'
@@ -16,6 +16,8 @@ const props = defineProps<{
   result: any
   error: string
   running: boolean
+  canceling?: boolean
+  retrying?: boolean
   nodeRun?: boolean
   readonly?: boolean
   nodeLabels?: Record<string, string>
@@ -23,13 +25,17 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   run: []
+  cancel: []
+  retry: []
   fileChange: [field: any, event: Event]
   focusNode: [nodeId: string]
 }>()
 
 const activeTab = ref<'input' | 'result' | 'detail' | 'trace'>('input')
 const tabs = computed(() => props.readonly ? ['result', 'detail', 'trace'] as const : ['input', 'result', 'detail', 'trace'] as const)
-const statusTone = computed(() => props.result?.status === 'succeeded' ? 'text-emerald-600' : props.result?.status === 'waiting' ? 'text-amber-600' : props.result?.status === 'failed' ? 'text-red-600' : 'text-[var(--muted)]')
+const statusTone = computed(() => props.result?.status === 'succeeded' ? 'text-emerald-600' : ['waiting', 'cancelling'].includes(props.result?.status) ? 'text-amber-600' : props.result?.status === 'failed' ? 'text-red-600' : 'text-[var(--muted)]')
+const canCancel = computed(() => !props.nodeRun && ['pending', 'running', 'cancelling'].includes(String(props.result?.status)))
+const canRetry = computed(() => !props.nodeRun && ['succeeded', 'failed', 'cancelled'].includes(String(props.result?.status)))
 
 watch(() => props.open, value => { if (value) activeTab.value = props.readonly ? 'result' : 'input' }, { immediate: true })
 watch(() => props.result?.id, value => { if (value) activeTab.value = props.result?.status === 'waiting' ? 'trace' : 'result' })
@@ -57,7 +63,7 @@ watch(() => props.result?.id, value => { if (value) activeTab.value = props.resu
           <WorkflowInputField v-for="field in fields" :key="field.name" v-model="inputs[field.name]" :field="field" :uploading="uploadingField === field.name" @file-change="emit('fileChange', field, $event)" />
           <div v-if="!fields.length" class="rounded-lg border border-dashed border-[var(--border)] py-10 text-center text-xs text-[var(--muted)]">{{ $t('designer.noWorkflowInputs') }}</div>
           <AlertBanner :message="error" tone="error" />
-          <Button type="submit" class="!mt-6 w-full justify-center" :loading="running"><Play :size="14" />{{ nodeRun ? $t('designer.runStep') : $t('workflow.run') }}</Button>
+          <div class="!mt-6 flex gap-2"><Button v-if="canCancel" type="button" class="flex-1 justify-center" variant="secondary" :loading="canceling" @click="emit('cancel')"><Square :size="14" />{{ $t('designer.cancelRun') }}</Button><Button type="submit" class="flex-1 justify-center" :loading="running" :disabled="canCancel"><Play :size="14" />{{ nodeRun ? $t('designer.runStep') : $t('workflow.run') }}</Button></div>
         </form>
 
         <div v-else-if="activeTab === 'result'">
@@ -65,6 +71,7 @@ watch(() => props.result?.id, value => { if (value) activeTab.value = props.resu
             <div class="flex items-center gap-2 text-xs font-semibold" :class="statusTone"><CheckCircle2 v-if="result.status === 'succeeded'" :size="15" /><Clock3 v-else-if="result.status === 'waiting'" :size="15" /><AlertCircle v-else :size="15" />{{ result.status }}</div>
             <WorkflowOutputRenderer :output="result.outputs || {}" />
             <AlertBanner :message="result.error || error" tone="error" />
+            <Button v-if="canRetry" type="button" variant="secondary" :loading="retrying" @click="emit('retry')"><RotateCcw :size="14" />{{ $t('designer.retryRun') }}</Button>
           </div>
           <div v-else class="muted py-16 text-center text-xs">{{ $t('designer.noRun') }}</div>
         </div>

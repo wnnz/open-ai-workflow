@@ -150,6 +150,20 @@ describe('PublicAppPage', () => {
     expect(wrapper.get('[data-testid="output"]').text()).toContain('restored-image')
   })
 
+  it('does not keep polling a cancelled public run', async () => {
+    sessionStorage.setItem('ordo:public-run:image-app', 'run-cancelled')
+    vi.mocked(axios.get)
+      .mockResolvedValueOnce({ data: application })
+      .mockResolvedValueOnce({ data: { run_id: 'run-cancelled', status: 'cancelled', outputs: {} } })
+
+    const wrapper = mountPage()
+    await flushPromises()
+
+    expect(axios.get).toHaveBeenCalledTimes(2)
+    expect(consumeRunEvents).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('publicApp.cancelled')
+  })
+
   it('redirects protected forms to login without showing an API key field', async () => {
     vi.mocked(axios.get).mockResolvedValueOnce({ data: { ...application, access: 'protected', access_options: { login: true, password: false } } })
 
@@ -181,7 +195,11 @@ describe('PublicAppPage', () => {
     expect(wrapper.text()).toContain('Alice')
     expect(wrapper.text()).not.toContain('API Key')
     expect(axios.post).toHaveBeenCalledWith('/v1/apps/image-app/form', expect.anything(), {
-      headers: { Authorization: 'Bearer session-token', 'Content-Type': 'application/json' },
+      headers: expect.objectContaining({
+        Authorization: 'Bearer session-token',
+        'Content-Type': 'application/json',
+        'Idempotency-Key': expect.any(String),
+      }),
     })
     expect(consumeRunEvents).toHaveBeenCalledWith(expect.any(String), expect.any(Function), {
       Authorization: 'Bearer session-token',

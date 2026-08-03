@@ -1,10 +1,12 @@
 import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException, Request
 
 from app.middleware.body_limit import RequestBodyLimitMiddleware
-from app.services import run_events
+from app.services import public_guard, run_events
 from app.services.scheduling import next_schedule_at
 
 
@@ -84,6 +86,66 @@ async def test_run_event_stream_replays_events_published_before_subscription(mon
     chunks = [item async for item in run_events.stream_run_events("run-1", "pending")]
     assert any('"delta": "hello"' in item for item in chunks)
     assert any('"type": "run_finished"' in item for item in chunks)
+
+
+@pytest.mark.asyncio
+async def test_public_rate_limiter_returns_retry_after_from_redis(monkeypatch) -> None:
+    settings = SimpleNamespace(
+        app_env="production",
+        public_access_rate_limit_requests=10,
+        public_upload_rate_limit_requests=10,
+        public_rate_limit_requests=30,
+        public_rate_limit_window_seconds=60,
+        redis_url="redis://test",
+        task_always_eager=True,
+    )
+
+    class Client:
+        closed = False
+
+        async def eval(self, script, key_count, key, window):
+            assert script == public_guard.RATE_LIMIT_SCRIPT
+            assert key_count == 1
+            assert key.startswith("public-rate:run:public-form:")
+            assert window == 60
+            return [31, 42]
+
+        async def aclose(self):
+            self.closed = True
+
+    client = Client()
+    monkeypatch.setattr(public_guard, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        public_guard.async_redis.Redis,
+        "from_url",
+        lambda *args, **kwargs: client,
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        await public_guard.enforce_public_rate_limit(
+            Request(http_scope()),
+            "public-form",
+            "run",
+        )
+    assert raised.value.status_code == 429
+    assert raised.value.headers == {"Retry-After": "42"}
+    assert client.closed is True
+
+
+def test_public_rate_limit_identity_ignores_unverified_credentials() -> None:
+    first_scope = http_scope()
+    first_scope["headers"] = [(b"authorization", b"Bearer forged-one")]
+    second_scope = http_scope()
+    second_scope["headers"] = [(b"authorization", b"Bearer forged-two")]
+    proxied_scope = http_scope()
+    proxied_scope["headers"] = [(b"x-real-ip", b"203.0.113.9")]
+
+    assert public_guard.client_identity(Request(first_scope)) == public_guard.client_identity(
+        Request(second_scope)
+    )
+    assert public_guard.client_identity(Request(first_scope)) != public_guard.client_identity(
+        Request(proxied_scope)
+    )
 
 
 def test_next_schedule_at_uses_the_published_cron_timezone() -> None:
