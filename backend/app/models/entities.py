@@ -5,7 +5,17 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -137,7 +147,10 @@ class ScriptVersion(Base):
 
 class Workflow(Base):
     __tablename__ = "workflows"
-    __table_args__ = (UniqueConstraint("workspace_id", "slug"),)
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "slug"),
+        Index("ux_workflows_slug", "slug", unique=True),
+    )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid4)
     workspace_id: Mapped[str] = mapped_column(
         ForeignKey("workspaces.id", ondelete="CASCADE"), index=True

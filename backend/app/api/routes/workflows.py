@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentUser, DbSession
 from app.core.config import get_settings
@@ -130,6 +131,24 @@ async def get_workflow(db: DbSession, workspace_id: str, workflow_id: str) -> Wo
     return workflow
 
 
+async def ensure_workflow_slug_available(
+    db: DbSession, slug: str, *, workflow_id: str | None = None
+) -> None:
+    query = select(Workflow.id).where(Workflow.slug == slug)
+    if workflow_id:
+        query = query.where(Workflow.id != workflow_id)
+    if await db.scalar(query):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Workflow slug is already in use")
+
+
+async def flush_workflow_slug(db: DbSession) -> None:
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "Workflow slug is already in use") from exc
+
+
 async def resolve_subworkflow_references(
     db: DbSession,
     workspace_id: str,
@@ -249,17 +268,19 @@ async def create_workflow(
         validate_graph(graph)
         app_type = "workflow"
         description = description or "上传英语试卷 Word 文件，自动完成非听力题并返回红字答案版。"
+    workflow_slug = payload.slug or slugify(payload.name)
+    await ensure_workflow_slug_available(db, workflow_slug)
     workflow = Workflow(
         workspace_id=workspace_id,
         name=payload.name,
-        slug=payload.slug or slugify(payload.name),
+        slug=workflow_slug,
         description=description,
         app_type=app_type,
         draft_graph=graph,
         created_by=user.id,
     )
     db.add(workflow)
-    await db.flush()
+    await flush_workflow_slug(db)
     db.add(audit(workspace_id, user.id, "workflow.created", "workflow", workflow.id))
     await db.commit()
     await db.refresh(workflow)
@@ -426,13 +447,21 @@ async def update_workflow(
     if workflow.draft_version != payload.expected_version:
         raise HTTPException(status.HTTP_409_CONFLICT, "Workflow was updated by another member")
     validate_draft_graph(payload.graph)
+    slug_changed = payload.slug is not None and payload.slug != workflow.slug
+    previous_slug = workflow.slug
+    if slug_changed:
+        await ensure_workflow_slug_available(db, payload.slug, workflow_id=workflow.id)
+        workflow.slug = payload.slug
     workflow.draft_graph = payload.graph
     workflow.draft_version += 1
     if payload.name is not None:
         workflow.name = payload.name
     if payload.description is not None:
         workflow.description = payload.description
-    db.add(audit(workspace_id, user.id, "workflow.updated", "workflow", workflow.id))
+    if slug_changed:
+        await flush_workflow_slug(db)
+    detail = {"slug": {"from": previous_slug, "to": workflow.slug}} if slug_changed else None
+    db.add(audit(workspace_id, user.id, "workflow.updated", "workflow", workflow.id, detail))
     await db.commit()
     await db.refresh(workflow)
     return workflow

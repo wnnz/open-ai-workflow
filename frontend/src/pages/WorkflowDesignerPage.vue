@@ -30,6 +30,7 @@ import WorkflowRunLogsPanel from '@/components/designer/WorkflowRunLogsPanel.vue
 import WorkflowEnvironmentPanel, { type WorkflowEnvironmentVariable } from '@/components/designer/WorkflowEnvironmentPanel.vue'
 import WorkflowSystemVariablesPanel from '@/components/designer/WorkflowSystemVariablesPanel.vue'
 import WorkflowSaveStatus from '@/components/designer/WorkflowSaveStatus.vue'
+import WorkflowSettingsPanel from '@/components/designer/WorkflowSettingsPanel.vue'
 import AlertBanner from '@/components/ui/AlertBanner.vue'
 import MarkdownComposer from '@/components/ui/MarkdownComposer.vue'
 import ModalShell from '@/components/ui/ModalShell.vue'
@@ -100,6 +101,7 @@ const comments = ref<WorkflowCommentThread[]>([])
 const canvasHost = ref<HTMLElement | null>(null); const nodeContextMenu = ref<{ nodeId: string; x: number; y: number } | null>(null)
 const loaded = ref(false); const saveError = ref(''); const saveConflict = ref(false); const lastSavedAt = ref<Date | null>(null)
 const dirty = ref(false); const editRevision = ref(0)
+const workflowSlugDraft = ref('')
 const activeSection = ref<DesignerSection>('orchestration'); const versions = ref<any[]>([]); const showHistory = ref(false); const showHelp = ref(false)
 const showApiAccess = ref(false)
 const showChecklist = ref(false); const showChangeHistory = ref(false); const pendingRestoreVersion = ref<any>(null); const restoringVersion = ref(false)
@@ -154,7 +156,7 @@ const contextMenuCanChange = computed(() => {
 const saveState = computed<'idle' | 'dirty' | 'saving' | 'saved' | 'error' | 'conflict'>(() => {
   if (saving.value) return 'saving'
   if (saveError.value) return saveConflict.value ? 'conflict' : 'error'
-  if (dirty.value) return 'dirty'
+  if (dirty.value || workflowSlugDraft.value !== workflow.value?.slug) return 'dirty'
   return lastSavedAt.value ? 'saved' : 'idle'
 })
 const localHistoryEntries = computed(() => graphHistory.value.map((state, index) => ({ state, index, time: historyTimes.value[index] })).reverse())
@@ -303,6 +305,7 @@ async function load() {
   loaded.value = false
   const { data } = await api.get(`/workspaces/${workspaceId.value}/workflows/${workflowId.value}`)
   workflow.value = data
+  workflowSlugDraft.value = data.slug
   const removedKnowledgeNodeIds = new Set<string>(
     data.draft_graph.nodes
       .filter((node: any) => String(node.data?.nodeType || node.type) === 'knowledge')
@@ -408,6 +411,8 @@ async function performSave() {
   try {
     const { data } = await api.put(`/workspaces/${workspaceId.value}/workflows/${workflowId.value}`, {
       name: workflow.value.name,
+      description: workflow.value.description,
+      slug: workflow.value.slug,
       graph: { schema_version: 1, ...snapshot },
       expected_version: workflow.value.draft_version,
     })
@@ -416,8 +421,9 @@ async function performSave() {
     if (dirty.value) scheduleSave()
     return true
   } catch (cause: any) {
-    saveConflict.value = cause.response?.status === 409
-    saveError.value = cause.response?.data?.detail || String(cause)
+    const detail = cause.response?.data?.detail
+    saveConflict.value = cause.response?.status === 409 && detail === 'Workflow was updated by another member'
+    saveError.value = typeof detail === 'string' ? detail : String(cause)
     dirty.value = true
     return false
   }
@@ -447,6 +453,50 @@ async function save(): Promise<boolean> {
   }
   return dirty.value ? save() : true
 }
+async function performWorkflowSlugSave() {
+  const revisionAtStart = editRevision.value
+  const snapshot = graphSnapshot()
+  saving.value = true; saveError.value = ''; saveConflict.value = false
+  try {
+    const { data } = await api.put(`/workspaces/${workspaceId.value}/workflows/${workflowId.value}`, {
+      name: workflow.value.name,
+      description: workflow.value.description,
+      slug: workflowSlugDraft.value.trim(),
+      graph: { schema_version: 1, ...snapshot },
+      expected_version: workflow.value.draft_version,
+    })
+    workflow.value = data
+    workflowSlugDraft.value = data.slug
+    lastSavedAt.value = new Date()
+    dirty.value = editRevision.value !== revisionAtStart
+    if (dirty.value) scheduleSave()
+    return true
+  } catch (cause: any) {
+    const detail = cause.response?.data?.detail
+    saveConflict.value = cause.response?.status === 409 && detail === 'Workflow was updated by another member'
+    saveError.value = typeof detail === 'string' ? detail : String(cause)
+    return false
+  } finally {
+    saving.value = false
+  }
+}
+async function saveWorkflowSlug(): Promise<boolean> {
+  if (!loaded.value || workflowSlugDraft.value === workflow.value?.slug) return true
+  while (activeSave) {
+    if (!await activeSave) return false
+  }
+  const attempt = performWorkflowSlugSave()
+  activeSave = attempt
+  try {
+    return await attempt
+  } finally {
+    if (activeSave === attempt) activeSave = null
+  }
+}
+async function saveAll(): Promise<boolean> {
+  if (!await save()) return false
+  return saveWorkflowSlug()
+}
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(() => { void save() }, 1000) }
 async function reloadDraftAfterConflict() {
   if (!window.confirm(t('designer.reloadConflictConfirm'))) return
@@ -454,7 +504,7 @@ async function reloadDraftAfterConflict() {
   await load()
 }
 function handleBeforeUnload(event: BeforeUnloadEvent) {
-  if (!dirty.value && !saving.value) return
+  if (!dirty.value && workflowSlugDraft.value === workflow.value?.slug && !saving.value) return
   event.preventDefault()
   event.returnValue = ''
 }
@@ -462,7 +512,7 @@ async function publish(payload: any = { change_note: 'Published from designer', 
   if (validationIssues.value.length) { showChecklist.value = true; return }
   publishing.value = true; publishSuccess.value = ''
   try {
-    if (!await save()) return
+    if (!await saveAll()) return
     const { data } = await api.post(`/workspaces/${workspaceId.value}/workflows/${workflowId.value}/publish`, payload)
     workflow.value.published_version_id = data.id
     workflow.value.published_access = payload.access
@@ -999,7 +1049,7 @@ function addCommandNode(type: string) {
 }
 function executeCommand(id: string) {
   if (id === 'run') openRunDialog()
-  else if (id === 'save') save()
+  else if (id === 'save') saveAll()
   else if (id === 'publish') openPublish()
   else if (id === 'layout') autoLayout()
   else if (id === 'history') openHistory()
@@ -1140,7 +1190,7 @@ watch(() => (nodes.value as any[]).map(node => node.id).join(','), () => {
 })
 watch(() => JSON.stringify(selected.value?.data?.config || {}), () => { if (!configEditing.value) syncConfigEditor(); if (selectedType.value === 'classifier') syncClassifierEdgeLabels() })
 watch(() => validationIssues.value.map(issue => `${issue.nodeId || ''}|${issue.code}|${issueText(issue)}`).join('\n'), syncValidationOverlay, { immediate: true })
-onBeforeRouteLeave(() => (!dirty.value && !saving.value) || window.confirm(t('designer.unsavedLeaveConfirm')))
+onBeforeRouteLeave(() => (!dirty.value && workflowSlugDraft.value === workflow.value?.slug && !saving.value) || window.confirm(t('designer.unsavedLeaveConfirm')))
 onMounted(async () => { window.addEventListener('keydown', handleKeydown); window.addEventListener('mouseup', stopMiddlePanning); window.addEventListener('blur', stopMiddlePanning); window.addEventListener('beforeunload', handleBeforeUnload); window.addEventListener('workflow-quick-add', handleQuickAdd); window.addEventListener('workflow-node-action', handleNodeAction); window.addEventListener('workflow-node-validation', handleNodeValidation); window.addEventListener('workflow-container-add', handleContainerAdd); window.addEventListener('workflow-container-delete', handleContainerDelete); window.addEventListener('workflow-edge-delete', handleEdgeDelete); await workspaces.load(); await loadResources(); await Promise.all([load(), loadApprovals(), loadEnvironmentVariables()]); await loadLatestRunResults() })
 onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTimeout(selectionRestoreTimer); window.removeEventListener('keydown', handleKeydown); window.removeEventListener('mouseup', stopMiddlePanning); window.removeEventListener('blur', stopMiddlePanning); window.removeEventListener('beforeunload', handleBeforeUnload); window.removeEventListener('workflow-quick-add', handleQuickAdd); window.removeEventListener('workflow-node-action', handleNodeAction); window.removeEventListener('workflow-node-validation', handleNodeValidation); window.removeEventListener('workflow-container-add', handleContainerAdd); window.removeEventListener('workflow-container-delete', handleContainerDelete); window.removeEventListener('workflow-edge-delete', handleEdgeDelete) })
 </script>
@@ -1199,7 +1249,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
             <button class="icon-button surface" :class="showSystemVariables && 'text-[var(--primary)]'" :title="t('designer.systemVariables')" :aria-label="t('designer.systemVariables')" @click="toggleSystemVariables"><Braces :size="15" /></button>
             <WorkflowSystemVariablesPanel v-if="showSystemVariables" @close="showSystemVariables = false" />
           </div>
-          <button class="icon-button surface" :title="t('common.save')" @click="save"><Save :size="16" /></button>
+          <button class="icon-button surface" :title="t('common.save')" @click="saveAll"><Save :size="16" /></button>
           </div>
         </template>
       </header>
@@ -1350,6 +1400,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
           </template>
         </WorkflowNodeInspector>
       </div>
+      <WorkflowSettingsPanel v-else-if="activeSection === 'settings'" v-model="workflowSlugDraft" :saved-slug="workflow?.slug || ''" :origin="origin" :published="Boolean(workflow?.published_version_id)" :saving="saving" :error="saveError" @edit="saveError = ''; saveConflict = false" @save="saveWorkflowSlug" />
       <div v-else-if="activeSection === 'api'" class="h-full overflow-y-auto bg-[var(--app-bg)] p-6"><div class="mx-auto max-w-5xl"><AlertBanner class="mb-4 !mt-0" :message="publishSuccess" tone="success" /><PublishPopover :open="true" :workflow="workflow" :versions="versions" :publishing="publishing" @publish="publish" @history="openVersionHistoryFromPublish" @api="openApiFromPublish" @run="openPublishedApp" /></div></div>
       <WorkflowRunLogsPanel v-else-if="activeSection === 'logs'" :runs="runs" :detail-open="replayMode" :selected-run-id="selectedRun?.id || ''" @refresh="loadRuns" @replay="replayRun" />
       <WorkflowMonitoringPanel v-else :runs="runs" />

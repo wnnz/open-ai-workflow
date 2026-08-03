@@ -196,6 +196,82 @@ def test_multi_workspace_invitation_and_role_boundary(client: TestClient):
     assert any(item["id"] == workspace_id and item["role"] == "editor" for item in member_workspaces)
 
 
+def test_workflow_slug_is_editable_validated_and_globally_unique(client: TestClient):
+    session = register(client, "slug-owner@example.com", "Slug Owner")
+    headers = auth(session)
+    first_workspace = client.post(
+        "/api/v1/workspaces",
+        headers=headers,
+        json={"name": "Slug Workspace One", "timezone": "Asia/Singapore"},
+    ).json()
+    second_workspace = client.post(
+        "/api/v1/workspaces",
+        headers=headers,
+        json={"name": "Slug Workspace Two", "timezone": "Asia/Singapore"},
+    ).json()
+
+    invalid = client.post(
+        f"/api/v1/workspaces/{first_workspace['id']}/workflows",
+        headers=headers,
+        json={"name": "Invalid slug", "slug": "Invalid Slug"},
+    )
+    assert invalid.status_code == 422
+
+    created = client.post(
+        f"/api/v1/workspaces/{first_workspace['id']}/workflows",
+        headers=headers,
+        json={"name": "English answer filler", "slug": "english-answer-filler"},
+    )
+    assert created.status_code == 201, created.text
+    workflow = created.json()
+    published = client.post(
+        f"/api/v1/workspaces/{first_workspace['id']}/workflows/{workflow['id']}/publish",
+        headers=headers,
+        json={"change_note": "Initial slug release"},
+    )
+    assert published.status_code == 200, published.text
+    assert client.get("/v1/apps/english-answer-filler").status_code == 200
+
+    duplicate = client.post(
+        f"/api/v1/workspaces/{second_workspace['id']}/workflows",
+        headers=headers,
+        json={"name": "Duplicate", "slug": "english-answer-filler"},
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "Workflow slug is already in use"
+
+    other = client.post(
+        f"/api/v1/workspaces/{second_workspace['id']}/workflows",
+        headers=headers,
+        json={"name": "Other", "slug": "other-workflow-address"},
+    ).json()
+    conflict = client.put(
+        f"/api/v1/workspaces/{second_workspace['id']}/workflows/{other['id']}",
+        headers=headers,
+        json={
+            "slug": "english-answer-filler",
+            "graph": other["draft_graph"],
+            "expected_version": other["draft_version"],
+        },
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"] == "Workflow slug is already in use"
+
+    renamed = client.put(
+        f"/api/v1/workspaces/{first_workspace['id']}/workflows/{workflow['id']}",
+        headers=headers,
+        json={
+            "slug": "english-answer-filler-v2",
+            "graph": workflow["draft_graph"],
+            "expected_version": workflow["draft_version"],
+        },
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["slug"] == "english-answer-filler-v2"
+    assert client.get("/v1/apps/english-answer-filler").status_code == 404
+    assert client.get("/v1/apps/english-answer-filler-v2").status_code == 200
+
+
 def test_versioned_script_and_workflow_publish(client: TestClient):
     session = client.post(
         "/api/v1/auth/login",

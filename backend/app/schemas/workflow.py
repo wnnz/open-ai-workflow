@@ -5,10 +5,12 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.common import ApiModel
 
+WORKFLOW_SLUG_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
+
 
 class WorkflowCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    slug: str | None = None
+    slug: str | None = Field(default=None, min_length=1, max_length=80, pattern=WORKFLOW_SLUG_PATTERN)
     description: str = ""
     app_type: str = "workflow"
     template_id: str | None = Field(default=None, max_length=80)
@@ -17,6 +19,7 @@ class WorkflowCreate(BaseModel):
 class WorkflowUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    slug: str | None = Field(default=None, min_length=1, max_length=80, pattern=WORKFLOW_SLUG_PATTERN)
     graph: dict[str, Any]
     expected_version: int
 
