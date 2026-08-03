@@ -10,6 +10,53 @@ vi.mock('@/api/client', () => ({
 describe('useWorkflowRuns', () => {
   beforeEach(() => vi.clearAllMocks())
 
+  it('loads the latest 100 runs for the embedded history view', async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({ data: { items: [{ id: 'run-1' }] } })
+    const workflowRuns = useWorkflowRuns({
+      workspaceId: computed(() => 'workspace-1'),
+      workflowId: computed(() => 'workflow-1'),
+      startFields: computed(() => []),
+      nodes: ref<any[]>([]),
+      selected: ref<any>(null),
+      inspectorTab: ref('settings'),
+      activeSection: ref('logs'),
+      currentEdges: () => [],
+      commitEdges: vi.fn(),
+      fitView: vi.fn(),
+    })
+
+    await workflowRuns.loadRuns()
+
+    expect(api.get).toHaveBeenCalledWith('/workspaces/workspace-1/workflows/workflow-1/runs', { params: { limit: 100, offset: 0 } })
+    expect(workflowRuns.runs.value).toEqual([{ id: 'run-1' }])
+  })
+
+  it('opens a historical run without leaving the logs section', async () => {
+    const detail = { id: 'run-1', status: 'succeeded', trace: [] }
+    vi.mocked(api.get).mockResolvedValueOnce({ data: detail })
+    const activeSection = ref('logs')
+    const fitView = vi.fn()
+    const workflowRuns = useWorkflowRuns({
+      workspaceId: computed(() => 'workspace-1'),
+      workflowId: computed(() => 'workflow-1'),
+      startFields: computed(() => []),
+      nodes: ref<any[]>([]),
+      selected: ref<any>(null),
+      inspectorTab: ref('settings'),
+      activeSection,
+      currentEdges: () => [],
+      commitEdges: vi.fn(),
+      fitView,
+    })
+
+    await workflowRuns.replayRun({ id: 'run-1' })
+
+    expect(activeSection.value).toBe('logs')
+    expect(workflowRuns.showRunDialog.value).toBe(true)
+    expect(workflowRuns.replayMode.value).toBe(true)
+    expect(fitView).not.toHaveBeenCalled()
+  })
+
   it('loads the latest node traces without applying a replay overlay', async () => {
     const trace = { node_id: 'image', node_type: 'image', status: 'succeeded', output: { images: [] } }
     vi.mocked(api.get)

@@ -18,7 +18,6 @@ import NodeOutputPanel from '@/components/designer/NodeOutputPanel.vue'
 import NodePalette from '@/components/designer/NodePalette.vue'
 import PublishPopover from '@/components/designer/PublishPopover.vue'
 import RunDebugPanel from '@/components/designer/RunDebugPanel.vue'
-import RunHistoryPopover from '@/components/designer/RunHistoryPopover.vue'
 import SelectionToolbar from '@/components/designer/SelectionToolbar.vue'
 import WorkflowCommentPin from '@/components/designer/WorkflowCommentPin.vue'
 import WorkflowCommentsPanel from '@/components/designer/WorkflowCommentsPanel.vue'
@@ -132,7 +131,7 @@ const filteredVariableGroups = computed(() => {
 })
 const startNode = computed<any>(() => (nodes.value as any[]).find(node => String(node.data?.nodeType || node.type) === 'start'))
 const startFields = computed<any[]>(() => startNode.value?.data?.config?.input_fields || [])
-const { approvalComment, approvals, clearRunOverlay, exitReplayMode, loadApprovals, loadLatestRunResults, loadRuns, nodeResults, openApprovals, openRunDialog, openRunHistory, pendingApprovals, replayMode, replayRun, respondingApproval, respondApproval, result, run, runError, runInputs, running, runNodeLabels, runs, runTargetLabel, runTargetNodeId, runtimeRunId, selectedApproval, selectedResult, selectedRun, showApprovals, showRunDialog, showRunHistory, uploadingField, uploadRunFile } = useWorkflowRuns({ workspaceId, workflowId, startFields, nodes, selected, inspectorTab, activeSection, currentEdges: currentCanvasEdges, commitEdges, fitView } as any)
+const { approvalComment, approvals, clearRunOverlay, exitReplayMode, loadApprovals, loadLatestRunResults, loadRuns, nodeResults, openApprovals, openRunDialog, pendingApprovals, replayMode, replayRun, respondingApproval, respondApproval, result, run, runError, runInputs, running, runNodeLabels, runs, runTargetLabel, runTargetNodeId, runtimeRunId, selectedApproval, selectedResult, selectedRun, showApprovals, showRunDialog, uploadingField, uploadRunFile } = useWorkflowRuns({ workspaceId, workflowId, startFields, nodes, selected, inspectorTab, activeSection, currentEdges: currentCanvasEdges, commitEdges, fitView } as any)
 const nextNodes = computed<any[]>(() => {
   if (!selected.value) return []
   const targets = new Set((currentCanvasEdges() as any[]).filter(edge => edge.source === selected.value!.id).map(edge => edge.target))
@@ -991,7 +990,8 @@ function focusCommandNode(nodeId: string) {
   nextTick(() => setTimeout(focusSelected, 50))
 }
 function focusTraceNode(nodeId: string) {
-  focusCommandNode(nodeId)
+  activeSection.value = 'orchestration'
+  nextTick(() => focusCommandNode(nodeId))
 }
 function addCommandNode(type: string) {
   paletteSourceId.value = null; paletteSourceHandle.value = null; paletteEdgeId.value = null; paletteParentId.value = null; paletteReplaceNodeId.value = null
@@ -1169,7 +1169,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
         <button class="icon-button mr-1 lg:hidden" :title="t('workflow.back')" :aria-label="t('workflow.back')" @click="router.push(`/w/${workspaceId}/studio`)"><ArrowLeft :size="16" /></button>
         <template v-if="replayMode">
           <div class="flex items-center gap-2 text-xs"><Activity :size="14" class="text-[var(--primary)]" /><span class="font-semibold">{{ t(`designer.triggerShort.${selectedRun?.triggered_by || 'studio'}`) }} ({{ selectedRun ? new Date(selectedRun.created_at).toLocaleTimeString() : '' }})</span><span class="muted">·</span><span class="rounded bg-[var(--panel-subtle)] px-2 py-1 text-[10px] font-medium">{{ t('designer.readOnly') }}</span></div>
-          <div class="ml-auto flex items-center gap-2"><div class="relative"><button class="icon-button surface" :title="t('designer.runHistory')" :aria-label="t('designer.runHistory')" @click="showRunHistory ? showRunHistory = false : openRunHistory()"><Activity :size="16" /></button><RunHistoryPopover :open="showRunHistory" :runs="runs" @close="showRunHistory = false" @refresh="loadRuns" @replay="replayRun" /></div><Button variant="secondary" @click="exitReplayMode"><ArrowLeft :size="14" />{{ t('designer.returnToEdit') }}</Button></div>
+          <Button class="ml-auto" variant="secondary" @click="exitReplayMode"><ArrowLeft :size="14" />{{ t('designer.returnToEdit') }}</Button>
         </template>
         <template v-else>
           <div class="flex min-w-0 items-center gap-1.5">
@@ -1179,7 +1179,6 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
           <button v-if="runtimeRunId" class="ml-3 flex h-7 items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300" :title="t('designer.clearRunOverlay')" @click="clearRunOverlay"><Activity :size="12" />{{ t('designer.runOverlay') }} · {{ runtimeRunId.slice(0, 8) }}<X :size="11" /></button>
           <div class="designer-header-actions ml-auto flex items-center gap-2">
             <Button variant="secondary" :loading="running && !runTargetNodeId" @click="openRunDialog()"><Play :size="14" />{{ t('workflow.run') }}<kbd class="ml-1 rounded border border-[var(--border)] bg-[var(--panel-subtle)] px-1 py-0.5 text-[9px] font-normal text-[var(--muted)]">Alt R</kbd></Button>
-            <div class="relative"><button class="icon-button surface" :title="t('designer.runHistory')" :aria-label="t('designer.runHistory')" @click="showRunHistory ? showRunHistory = false : openRunHistory()"><Activity :size="16" /></button><RunHistoryPopover :open="showRunHistory" :runs="runs" @close="showRunHistory = false" @refresh="loadRuns" @replay="replayRun" /></div>
           <button class="icon-button surface relative" :title="t('designer.pendingApprovals')" :aria-label="t('designer.pendingApprovals')" @click="openApprovals()"><UserCheck :size="16" /><span v-if="pendingApprovals.length" class="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[8px] font-bold text-white">{{ pendingApprovals.length }}</span></button>
           <button class="icon-button surface" :title="t('designer.history')" @click="openHistory"><History :size="16" /></button>
           <div class="relative">
@@ -1352,7 +1351,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
         </WorkflowNodeInspector>
       </div>
       <div v-else-if="activeSection === 'api'" class="h-full overflow-y-auto bg-[var(--app-bg)] p-6"><div class="mx-auto max-w-5xl"><AlertBanner class="mb-4 !mt-0" :message="publishSuccess" tone="success" /><PublishPopover :open="true" :workflow="workflow" :versions="versions" :publishing="publishing" @publish="publish" @history="openVersionHistoryFromPublish" @api="openApiFromPublish" @run="openPublishedApp" /></div></div>
-      <WorkflowRunLogsPanel v-else-if="activeSection === 'logs'" :runs="runs" @refresh="loadRuns" />
+      <WorkflowRunLogsPanel v-else-if="activeSection === 'logs'" :runs="runs" :detail-open="replayMode" :selected-run-id="selectedRun?.id || ''" @refresh="loadRuns" @replay="replayRun" />
       <WorkflowMonitoringPanel v-else :runs="runs" />
     </div>
     <ModalShell v-model="showApiAccess" :title="t('designer.apiTitle')" :description="t('designer.apiHint')" max-width="max-w-4xl"><WorkflowApiPanel compact :origin="origin" :slug="workflow?.slug" :triggers="startNode?.data?.config?.triggers" :input-fields="startFields" /></ModalShell>

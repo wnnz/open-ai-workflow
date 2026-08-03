@@ -26,7 +26,6 @@ export function useWorkflowRuns(options: WorkflowRunOptions) {
   const runInputs = ref<Record<string, any>>({})
   const runError = ref('')
   const uploadingField = ref('')
-  const showRunHistory = ref(false)
   const selectedRun = ref<any>(null)
   const runTargetNodeId = ref<string | null>(null)
   const nodeResults = ref<Record<string, any>>({})
@@ -92,7 +91,7 @@ export function useWorkflowRuns(options: WorkflowRunOptions) {
   async function loadRuns() {
     runs.value = (await api.get(
       `/workspaces/${options.workspaceId.value}/workflows/${options.workflowId.value}/runs`,
-      { params: { limit: 20, offset: 0 } },
+      { params: { limit: 100, offset: 0 } },
     )).data.items
   }
 
@@ -187,11 +186,6 @@ export function useWorkflowRuns(options: WorkflowRunOptions) {
     }
   }
 
-  async function openRunHistory() {
-    await loadRuns()
-    showRunHistory.value = true
-  }
-
   async function replayRun(runRecord: any) {
     const detail = (await api.get(
       `/workspaces/${options.workspaceId.value}/workflows/${options.workflowId.value}/runs/${runRecord.id}`,
@@ -199,12 +193,9 @@ export function useWorkflowRuns(options: WorkflowRunOptions) {
     selectedRun.value = detail
     result.value = detail
     applyRunOverlay(detail)
-    showRunHistory.value = false
     showRunDialog.value = true
     runTargetNodeId.value = null
     options.selected.value = null
-    options.activeSection.value = 'orchestration'
-    setTimeout(() => options.fitView({ padding: 0.2, duration: 300 }), 0)
   }
 
   function exitReplayMode() {
@@ -225,7 +216,6 @@ export function useWorkflowRuns(options: WorkflowRunOptions) {
     nodeResults,
     openApprovals,
     openRunDialog,
-    openRunHistory,
     pendingApprovals,
     replayMode,
     replayRun,
@@ -246,7 +236,6 @@ export function useWorkflowRuns(options: WorkflowRunOptions) {
     selectedRun,
     showApprovals,
     showRunDialog,
-    showRunHistory,
     uploadingField,
     uploadRunFile,
   }

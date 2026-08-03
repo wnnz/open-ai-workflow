@@ -16,4 +16,24 @@ describe('RunHistoryPopover', () => {
     await wrapper.findAll('button').at(-1)!.trigger('click')
     expect(wrapper.emitted('replay')?.[0]).toEqual([run])
   })
+
+  it('renders a compact full-width table and highlights the selected run when embedded', async () => {
+    const run = { id: 'run-1', status: 'succeeded', triggered_by: 'form', created_at: '2026-07-24T12:00:00Z' }
+    const wrapper = mount(RunHistoryPopover, {
+      props: { open: true, runs: [run], embedded: true, selectedRunId: run.id },
+      global: { plugins: [i18n] },
+    })
+
+    expect(wrapper.find('.surface').classes()).toContain('relative')
+    expect(wrapper.find('.surface').classes()).not.toContain('absolute')
+    expect(wrapper.find('.surface').classes()).not.toContain('h-full')
+    expect(wrapper.find('button[aria-label="关闭"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('触发方式')
+    expect(wrapper.text()).toContain('运行 ID')
+    expect(wrapper.text()).toContain('运行成功')
+    expect(wrapper.find('button[aria-current="true"]').exists()).toBe(true)
+
+    await wrapper.find('button[aria-label="刷新"]').trigger('click')
+    expect(wrapper.emitted('refresh')).toHaveLength(1)
+  })
 })
