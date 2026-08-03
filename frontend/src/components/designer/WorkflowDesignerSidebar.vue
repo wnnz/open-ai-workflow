@@ -14,12 +14,11 @@ import {
   Pencil,
   PanelLeftOpen,
   Search,
-  Settings2,
   Sparkles,
   Sun,
 } from 'lucide-vue-next'
 
-export type DesignerSection = 'orchestration' | 'api' | 'logs' | 'monitoring' | 'settings'
+export type DesignerSection = 'orchestration' | 'api' | 'logs' | 'monitoring'
 
 const props = defineProps<{
   collapsed?: boolean
@@ -74,7 +73,6 @@ const navigation: Array<{ id: DesignerSection; icon: typeof Sparkles; label: str
   { id: 'api', icon: Code2, label: 'designer.publishMenu' },
   { id: 'logs', icon: Logs, label: 'designer.logs' },
   { id: 'monitoring', icon: Monitor, label: 'designer.monitoring' },
-  { id: 'settings', icon: Settings2, label: 'designer.workflowSettings' },
 ]
 </script>
 

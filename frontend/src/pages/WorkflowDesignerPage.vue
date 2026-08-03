@@ -1400,8 +1400,7 @@ onUnmounted(() => { clearTimeout(saveTimer); clearTimeout(historyTimer); clearTi
           </template>
         </WorkflowNodeInspector>
       </div>
-      <WorkflowSettingsPanel v-else-if="activeSection === 'settings'" v-model="workflowSlugDraft" :saved-slug="workflow?.slug || ''" :origin="origin" :published="Boolean(workflow?.published_version_id)" :saving="saving" :error="saveError" @edit="saveError = ''; saveConflict = false" @save="saveWorkflowSlug" />
-      <div v-else-if="activeSection === 'api'" class="h-full overflow-y-auto bg-[var(--app-bg)] p-6"><div class="mx-auto max-w-5xl"><AlertBanner class="mb-4 !mt-0" :message="publishSuccess" tone="success" /><PublishPopover :open="true" :workflow="workflow" :versions="versions" :publishing="publishing" @publish="publish" @history="openVersionHistoryFromPublish" @api="openApiFromPublish" @run="openPublishedApp" /></div></div>
+      <div v-else-if="activeSection === 'api'" class="h-full overflow-y-auto bg-[var(--app-bg)] p-6"><div class="mx-auto max-w-5xl"><AlertBanner class="mb-4 !mt-0" :message="publishSuccess" tone="success" /><div class="space-y-4"><WorkflowSettingsPanel v-model="workflowSlugDraft" :saved-slug="workflow?.slug || ''" :origin="origin" :published="Boolean(workflow?.published_version_id)" :saving="saving" :error="saveError" @edit="saveError = ''; saveConflict = false" @save="saveWorkflowSlug" /><PublishPopover :open="true" :workflow="workflow" :versions="versions" :publishing="publishing" @publish="publish" @history="openVersionHistoryFromPublish" @api="openApiFromPublish" @run="openPublishedApp" /></div></div></div>
       <WorkflowRunLogsPanel v-else-if="activeSection === 'logs'" :runs="runs" :detail-open="replayMode" :selected-run-id="selectedRun?.id || ''" @refresh="loadRuns" @replay="replayRun" />
       <WorkflowMonitoringPanel v-else :runs="runs" />
     </div>

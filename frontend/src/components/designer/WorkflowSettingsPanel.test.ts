@@ -20,6 +20,7 @@ describe('WorkflowSettingsPanel', () => {
       global: { plugins: [i18n, [PrimeVue, { unstyled: true }]] },
     })
 
+    expect(wrapper.text()).toContain('公开地址')
     expect(wrapper.text()).toContain('https://example.com/apps/workspace-a1b2c3')
     expect(wrapper.text()).toContain('旧的 Web、API 和 Webhook 地址会立即失效')
     expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeDefined()
